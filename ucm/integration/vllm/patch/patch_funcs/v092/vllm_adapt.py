@@ -794,7 +794,7 @@ def _patch_attention_layer() -> None:
         from typing import Optional
 
         import torch
-
+        from vllm.attention import layer
         from vllm.forward_context import ForwardContext, get_forward_context
         from vllm.attention.layer import (
             maybe_save_kv_layer_to_connector,
@@ -823,7 +823,9 @@ def _patch_attention_layer() -> None:
                 ucm_sparse.attention_begin(
                     query, key, value, layer_name, forward_context, phase
                 )
-
+        layer.maybe_execute_sparse_attention_begin = (
+            maybe_execute_sparse_attention_begin
+        )
 
         def maybe_execute_sparse_attention_finished(
                 query: torch.Tensor,
@@ -850,8 +852,11 @@ def _patch_attention_layer() -> None:
         vllm_ops = torch.ops.vllm
         orig_packet = vllm_ops.unified_attention_with_output
 
+        
+        layer.maybe_execute_sparse_attention_finished = (
+            maybe_execute_sparse_attention_finished
+        )
         class _UnifiedWrapper:
-            """包装原 OpOverloadPacket，只重写 __call__，其他属性透传."""
             def __init__(self, orig):
                 self._orig = orig
 
@@ -913,9 +918,6 @@ def _patch_attention_layer() -> None:
             layer_name: str,
             output_scale: Optional[torch.Tensor] = None,
         ) -> None:
-            # 这里是被 torch.ops.vllm.unified_attention_with_output 直接调用的实现
-            print("=========== [UCM PATCH] unified_attention_with_output HIT", layer_name, flush=True)
-
             wait_for_kv_layer_from_connector(layer_name)
 
             forward_context: ForwardContext = get_forward_context()
@@ -948,16 +950,7 @@ def _patch_attention_layer() -> None:
                 )
 
             maybe_save_kv_layer_to_connector(layer_name, kv_cache)
-            # 注意：C++ schema 是返回 None，所以这里不要 return output
         
-        from vllm.attention import layer
-        
-        layer.maybe_execute_sparse_attention_begin = (
-            maybe_execute_sparse_attention_begin
-        )
-        layer.maybe_execute_sparse_attention_finished = (
-            maybe_execute_sparse_attention_finished
-        )
         layer.unified_attention = unified_attention
         layer.unified_attention_with_output = unified_attention_with_output_impl
         
