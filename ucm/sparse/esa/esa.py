@@ -436,8 +436,17 @@ class ReqStatePerLayer:
                         self.init_window
                     )
                     self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window
-                self.start_retrieval(query, forward_context)
-                self.wait_retrieval_and_start_load()
+        
+        # 当 step >= 1 时执行检索
+        if self.step >= 1: # 记录用于检索的 query，用于后续相似度比较
+            query_repr = self._prepare_query_repr(query)
+            self._maybe_record_query_similarity(query_repr, self.step)
+            
+            self._retrieval_step = self.step
+            self.start_retrieval(query, forward_context)
+            self.wait_retrieval_and_start_load()
+        
+        if self.tasks:
             self.wait_transfer_task_done()
 
     def attention_finished(
