@@ -222,6 +222,30 @@ class ReqStatePerLayer:
         self.head_size = vllm_config.model_config.get_head_size()
         self.is_mla = self.vllm_config.model_config.is_deepseek_mla
         self.step = 0
+        self.total_num_hidden_layers = vllm_config.model_config.get_num_layers(
+            vllm_config.parallel_config)
+    
+
+    def get_sparse_ratio(self) -> float:
+        """计算该层的 sparse_ratio
+        前一半层：sparse_ratio = self.esa_cfg["sparse_ratio"]（从配置读取）
+        后一半层：从 self.esa_cfg["sparse_ratio"] 逐渐递减到 0.1
+        """
+        base_sparse_ratio = self.esa_cfg["sparse_ratio"]
+        num_layers = self.total_num_hidden_layers
+        half_layers = num_layers // 2
+        
+        if self.layer_id < half_layers:
+            # 前一半层：使用配置中的 sparse_ratio
+            return base_sparse_ratio
+        else:
+            # 后一半层：从 base_sparse_ratio 线性递减到 0.1
+            # 计算在后一半层中的位置（0 到 1）
+            if num_layers - half_layers == 0:
+                return base_sparse_ratio
+            progress = (self.layer_id - half_layers) / (num_layers - half_layers)
+            # 从 base_sparse_ratio 递减到 0.1
+            return base_sparse_ratio - progress * (base_sparse_ratio - 0.1)
 
     def set_block_hashes(self, token_ids):
         if self.block_hashes is not None:
@@ -329,7 +353,9 @@ class ReqStatePerLayer:
         elif num_q_heads < self.num_key_heads:
             query = torch.repeat_interleave(query, self.num_key_heads // num_q_heads, 1)
         query_flat = query.reshape(query.shape[0], -1)
-        top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
+        # top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
+        sparse_ratio = self.get_sparse_ratio()
+        top_k = int(self.sparse_range * sparse_ratio)
         indexes = [self.slots]
         self.retrieval_task = self.retrieval_worker.submit(
             query_flat, topk=top_k, indexes=indexes
@@ -341,7 +367,8 @@ class ReqStatePerLayer:
         choosed_slots = result["indices"][0]
         rel_block_ids = [self.slots_to_relative_indexes[int(e)] for e in choosed_slots]
         block_hashes = [self.block_hashes[id_] for id_ in rel_block_ids]
-        top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
+        sparse_ratio = self.get_sparse_ratio()
+        top_k = int(self.sparse_range * sparse_ratio)
         vllm_block_ids = self.req_meta.vllm_block_ids[
             self.esa_cfg["init_window_sz"] : self.esa_cfg["init_window_sz"] + top_k
         ]
@@ -774,6 +801,8 @@ class ESA(UcmSparseBase):
             local_window_tokens = flaw + block_size * (
                 self.esa_cfg["local_window_sz"] - 1
             )
+        # 使用配置中的 sparse_ratio 进行估算，确保有足够空间
+        # 前一半层使用 self.esa_cfg["sparse_ratio"]，后一半层从该值递减到 0.1
         compressed_prompt_len = (
             self.esa_cfg["init_window_sz"] * block_size
             + int(sparse_range * self.esa_cfg["sparse_ratio"]) * block_size
