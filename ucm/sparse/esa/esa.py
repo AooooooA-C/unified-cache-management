@@ -222,32 +222,24 @@ class ReqStatePerLayer:
         self.head_size = vllm_config.model_config.get_head_size()
         self.is_mla = self.vllm_config.model_config.is_deepseek_mla
         self.step = 0
-        self.total_num_hidden_layers = vllm_config.model_config.get_num_layers(
-            vllm_config.parallel_config)
         # 保存检索到的 block IDs，用于构建每层的 block_table
         self.retrieved_vllm_block_ids: Optional[List[int]] = None
-    
-
-    def get_sparse_ratio(self) -> float:
-        """计算该层的 sparse_ratio
-        前一半层：sparse_ratio = self.esa_cfg["sparse_ratio"]（从配置读取）
-        后一半层：从 self.esa_cfg["sparse_ratio"] 逐渐递减到 0.1
-        """
-        base_sparse_ratio = self.esa_cfg["sparse_ratio"]
-        num_layers = self.total_num_hidden_layers
-        half_layers = num_layers // 2
         
-        if self.layer_id < half_layers:
-            # 前一半层：使用配置中的 sparse_ratio
-            return base_sparse_ratio
-        else:
-            # 后一半层：从 base_sparse_ratio 线性递减到 0.1
-            # 计算在后一半层中的位置（0 到 1）
-            if num_layers - half_layers == 0:
-                return base_sparse_ratio
-            progress = (self.layer_id - half_layers) / (num_layers - half_layers)
-            # 从 base_sparse_ratio 递减到 0.1
-            return base_sparse_ratio - progress * (base_sparse_ratio - 0.1)
+        # 获取总层数（如果可用）
+        try:
+            self.total_num_hidden_layers = vllm_config.model_config.get_num_layers(
+                vllm_config.parallel_config
+            )
+        except:
+            self.total_num_hidden_layers = None
+
+    def is_sparse_layer(self) -> bool:
+        """判断当前层是否需要进行稀疏化
+        
+        如果配置了 skip_sparse_layers，前 L 个 layer 不进行稀疏化
+        """
+        skip_layers = self.esa_cfg.get("skip_sparse_layers", 0)
+        return self.layer_id >= skip_layers
 
     def set_block_hashes(self, token_ids):
         if self.block_hashes is not None:
@@ -333,7 +325,7 @@ class ReqStatePerLayer:
         self.init_static_flag = True
 
     def wait_transfer_task_done(self):
-        assert len(self.tasks) > 0
+        # assert len(self.tasks) > 0
         for task_hash, task in self.tasks.items():
             # TODO: handle exceptions
             ret = self.store_instance.wait(task)
@@ -355,9 +347,7 @@ class ReqStatePerLayer:
         elif num_q_heads < self.num_key_heads:
             query = torch.repeat_interleave(query, self.num_key_heads // num_q_heads, 1)
         query_flat = query.reshape(query.shape[0], -1)
-        # top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
-        sparse_ratio = self.get_sparse_ratio()
-        top_k = int(self.sparse_range * sparse_ratio)
+        top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
         indexes = [self.slots]
         self.retrieval_task = self.retrieval_worker.submit(
             query_flat, topk=top_k, indexes=indexes
@@ -369,19 +359,14 @@ class ReqStatePerLayer:
         choosed_slots = result["indices"][0]
         rel_block_ids = [self.slots_to_relative_indexes[int(e)] for e in choosed_slots]
         block_hashes = [self.block_hashes[id_] for id_ in rel_block_ids]
-        sparse_ratio = self.get_sparse_ratio()
-        top_k = int(self.sparse_range * sparse_ratio)
+        top_k = int(self.sparse_range * self.esa_cfg["sparse_ratio"])
         
         # 根据检索结果映射到实际的 vllm_block_ids
-        # rel_block_ids 是检索返回的相对索引（在 sparse_range 范围内）
-        # 需要映射到实际的 vllm_block_ids
         sparse_start_idx = self.esa_cfg["init_window_sz"]
         retrieved_vllm_block_ids = []
         
         # 取前 top_k 个检索结果，映射到实际的 vllm_block_ids
         for i, rel_block_id in enumerate(rel_block_ids[:top_k]):
-            # rel_block_id 是在 sparse_range 范围内的相对索引（相对于 init_window_sz）
-            # 对应的实际 vllm_block_id = sparse_start_idx + rel_block_id
             if rel_block_id < self.sparse_range:
                 vllm_block_id = self.req_meta.vllm_block_ids[sparse_start_idx + rel_block_id]
                 retrieved_vllm_block_ids.append(vllm_block_id)
@@ -401,24 +386,15 @@ class ReqStatePerLayer:
                 "load", list(diff_blocks.values()), list(diff_blocks.keys())
             )
 
-        ## 2. load all
-        # self.launch_transfer_task(
-        #     "load", block_hashes, vllm_block_ids
-        # )
-
         self.retrieval_task = None
         # 保存检索到的 block IDs，用于构建每层的 block_table
-        # 这些是实际被检索到并选择的 blocks，每层可能不同
         self.retrieved_vllm_block_ids = retrieved_vllm_block_ids
 
     def _build_layer_block_table(self) -> List[int]:
         """构建当前层实际使用的 block_table
         
-        包括：
-        1. init_window blocks
-        2. 检索到的 sparse blocks (根据当前层的 sparse_ratio)
-        3. local_window blocks
-        4. output tokens 的 blocks
+        对于不稀疏化的层：返回所有 prompt blocks + output blocks
+        对于稀疏化的层：返回 init_window + sparse blocks + local_window + output blocks
         """
         if self.req_meta is None:
             return []
@@ -430,7 +406,13 @@ class ReqStatePerLayer:
             num_prompt_blocks = math.ceil(self.req_meta.num_prompt_tokens / self.block_size)
             return list(vllm_block_ids[:num_prompt_blocks])
         
-        # step >= 1 (decode) 阶段：使用稀疏化的 blocks
+        # step >= 1 (decode) 阶段
+        # 不稀疏化的层：使用所有 blocks（完整的 block_table）
+        if not self.is_sparse_layer():
+            # 返回所有已分配的 blocks（prompt + output）
+            return list(vllm_block_ids)
+        
+        # 稀疏化的层：使用稀疏化后的 blocks
         # 1. init_window blocks
         init_blocks = vllm_block_ids[:self.esa_cfg["init_window_sz"]]
         
@@ -454,8 +436,8 @@ class ReqStatePerLayer:
     def _compute_layer_seq_len(self) -> int:
         """计算当前层对应的 seq_len（tokens数量）
         
-        seq_len = 实际使用的 KV cache tokens 数量
-        即从 block_table 中能访问到的 tokens 总数
+        对于不稀疏化的层：返回完整的 tokens 数量
+        对于稀疏化的层：返回实际使用的 KV cache tokens 数量
         """
         layer_block_table = self._build_layer_block_table()
         num_blocks = len(layer_block_table)
@@ -467,27 +449,27 @@ class ReqStatePerLayer:
         if self.step == 0:
             return self.req_meta.num_prompt_tokens
         
-        # step >= 1 (decode) 阶段：计算所有使用的 blocks 中的 tokens
-        # 大部分 blocks 是完整的，只有最后一个 block 可能不完整
+        # step >= 1 (decode) 阶段
+        # 不稀疏化的层：返回完整的 tokens 数量
+        if not self.is_sparse_layer():
+            total_tokens = self.req_meta.num_prompt_tokens + self.req_meta.num_output_tokens
+            return total_tokens
+        
+        # 稀疏化的层：计算所有使用的 blocks 中的 tokens
         num_prompt_blocks = math.ceil(self.req_meta.num_prompt_tokens / self.block_size)
         total_tokens = self.req_meta.num_prompt_tokens + self.req_meta.num_output_tokens
         
         if num_blocks <= num_prompt_blocks:
             # 只有 prompt blocks，最后一个 block 可能不完整
             if num_blocks == num_prompt_blocks:
-                # 包含所有 prompt blocks，最后一个可能不完整
                 return self.req_meta.num_prompt_tokens
             else:
-                # 部分 prompt blocks
                 return num_blocks * self.block_size
         else:
             # 包含 output tokens 的 blocks
-            # 计算最后一个 block 中的 tokens 数量
             last_block_tokens = total_tokens % self.block_size
             if last_block_tokens == 0:
                 last_block_tokens = self.block_size
-            
-            # 前面的 blocks 都是完整的，只有最后一个可能不完整
             seq_len = (num_blocks - 1) * self.block_size + last_block_tokens
             return seq_len
 
@@ -514,21 +496,17 @@ class ReqStatePerLayer:
         req_index = self.req_meta.index_in_batch
         
         # 更新 block_table
-        # 优先使用 block_tables（批量处理）
         if hasattr(attn_metadata, 'block_tables'):
             if req_index < attn_metadata.block_tables.shape[0]:
                 max_blocks = attn_metadata.block_tables.shape[1]
                 num_blocks = min(len(layer_block_table), max_blocks)
                 if num_blocks > 0:
-                    # 将新的 block_table 复制到指定位置
-                    # 先清零，然后填充有效 blocks
                     attn_metadata.block_tables[req_index, :].fill_(0)
                     attn_metadata.block_tables[req_index, :num_blocks].copy_(
                         torch.tensor(layer_block_table[:num_blocks], dtype=torch.int32, 
                                    device=attn_metadata.block_tables.device)
                     )
         elif hasattr(attn_metadata, 'block_table'):
-            # 单个请求的 block_table (CUDA tensor)
             if isinstance(attn_metadata.block_table, torch.Tensor):
                 if req_index < attn_metadata.block_table.shape[0]:
                     max_blocks = attn_metadata.block_table.shape[1]
@@ -559,7 +537,6 @@ class ReqStatePerLayer:
         if self.is_mla and hasattr(attn_metadata, 'decode'):
             decode_metadata = attn_metadata.decode
             if decode_metadata is not None and self.step >= 1:
-                # 更新 decode metadata 的 block_tables
                 if hasattr(decode_metadata, 'block_tables'):
                     if req_index < decode_metadata.block_tables.shape[0]:
                         max_blocks = decode_metadata.block_tables.shape[1]
@@ -570,24 +547,6 @@ class ReqStatePerLayer:
                                 torch.tensor(layer_block_table[:num_blocks], dtype=torch.int32,
                                            device=decode_metadata.block_tables.device)
                             )
-                elif hasattr(decode_metadata, 'block_table'):
-                    if isinstance(decode_metadata.block_table, torch.Tensor):
-                        if req_index < decode_metadata.block_table.shape[0]:
-                            max_blocks = decode_metadata.block_table.shape[1]
-                            num_blocks = min(len(layer_block_table), max_blocks)
-                            if num_blocks > 0:
-                                block_table_tensor = torch.zeros(
-                                    max_blocks,
-                                    dtype=torch.int32,
-                                    device=decode_metadata.block_table.device
-                                )
-                                block_table_tensor[:num_blocks] = torch.tensor(
-                                    layer_block_table[:num_blocks],
-                                    dtype=torch.int32,
-                                    device=decode_metadata.block_table.device
-                                )
-                                decode_metadata.block_table[req_index] = block_table_tensor
-                # 更新 decode metadata 的 seq_lens
                 if hasattr(decode_metadata, 'seq_lens'):
                     if isinstance(decode_metadata.seq_lens, torch.Tensor):
                         if req_index < decode_metadata.seq_lens.shape[0]:
@@ -597,6 +556,10 @@ class ReqStatePerLayer:
                             decode_metadata.seq_lens[req_index] = layer_seq_len
 
     def block_repre_data(self):
+        # 不稀疏化的层不需要提取 block 表征
+        if not self.is_sparse_layer():
+            return
+        
         self.sparse_range = get_sparse_range(
             self.esa_cfg["init_window_sz"],
             self.esa_cfg["local_window_sz"],
@@ -645,6 +608,22 @@ class ReqStatePerLayer:
         forward_context: ForwardContext,
     ) -> None:
         self.maybe_register_static_data(forward_context)
+        
+        # 不稀疏化的层不需要检索和恢复 init/local window
+        if not self.is_sparse_layer():
+            # 对于不稀疏化的层，在 step=0 时也需要初始化 sparse_range（用于计算）
+            if self.sparse_range == 0:
+                self.sparse_range = get_sparse_range(
+                    self.esa_cfg["init_window_sz"],
+                    self.esa_cfg["local_window_sz"],
+                    self.req_meta.num_prompt_tokens,
+                    self.block_size,
+                )
+            # 直接更新 block_table 和 seq_lens（使用完整的 blocks）
+            self._update_attn_metadata_block_table(forward_context)
+            return
+        
+        # 稀疏化的层：执行检索和恢复逻辑
         if self.step % self.esa_cfg["retrieval_stride"] == 1:
             if self.step == 1:
                 vllm_block_ids = self.req_meta.vllm_block_ids
@@ -671,11 +650,10 @@ class ReqStatePerLayer:
                     self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window
                 self.start_retrieval(query, forward_context)
                 self.wait_retrieval_and_start_load()
-            self.wait_transfer_task_done()
+            if len(self.tasks) > 0:
+                self.wait_transfer_task_done()
         
         # 更新每层的 block_table 和 seq_lens
-        # step=0: 使用所有 prompt blocks
-        # step>=1: 使用稀疏化后的 blocks
         self._update_attn_metadata_block_table(forward_context)
 
     def attention_finished(
@@ -691,10 +669,12 @@ class ReqStatePerLayer:
                 self.block_repre_data()
                 self.step += 1
         else:
-            if self.step % self.esa_cfg["retrieval_stride"] == 2:
-                self.start_retrieval(query, forward_context)
-            if self.step % self.esa_cfg["retrieval_stride"] == 0:
-                self.wait_retrieval_and_start_load()
+            # 不稀疏化的层不需要检索
+            if self.is_sparse_layer():
+                if self.step % self.esa_cfg["retrieval_stride"] == 2:
+                    self.start_retrieval(query, forward_context)
+                if self.step % self.esa_cfg["retrieval_stride"] == 0:
+                    self.wait_retrieval_and_start_load()
             self.step += 1
 
 
@@ -1012,8 +992,6 @@ class ESA(UcmSparseBase):
             local_window_tokens = flaw + block_size * (
                 self.esa_cfg["local_window_sz"] - 1
             )
-        # 使用配置中的 sparse_ratio 进行估算，确保有足够空间
-        # 前一半层使用 self.esa_cfg["sparse_ratio"]，后一半层从该值递减到 0.1
         compressed_prompt_len = (
             self.esa_cfg["init_window_sz"] * block_size
             + int(sparse_range * self.esa_cfg["sparse_ratio"]) * block_size
