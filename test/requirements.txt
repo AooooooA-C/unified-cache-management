@@ -4,3 +4,7 @@ PyYAML>=6.0
 # MySQL
 peewee>=3.14.5
 pymysql>=1.0.2
+# F1 Score Evaluation
+jieba>=0.42.1
+fuzzywuzzy>=0.18.0
+rouge>=1.0.0

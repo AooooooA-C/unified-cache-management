@@ -20,8 +20,16 @@ database:
 # LLM Connection Configuration
 llm_connection:
   model: "qwen3"
-  server_url: "http://141.111.32.70:9382"
+  server_url: "http://127.0.0.0:7990"
   tokenizer_path: "/home/models/QwQ-32B"
   stream: true    # stream output
   ignore_eos: true    # Ignore the returned terminator
   timeout: 180    # request time out
+
+# Sparse Method Accuracy Test Configuration
+sparse_accuracy_test:
+  # model_path: "/home/models/QwQ-32B"
+  storage_backends: "/tmp/ucm_kv_cache_test"
+  ucm_sparse_config: null  # UCM 稀疏化配置文件路径，null 使用默认配置
+  strip_think: false  # QwQ 模型需要 true，其他模型通常为 false
+  max_samples: 20  # null 表示使用所有数据
