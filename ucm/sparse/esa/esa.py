@@ -1,6 +1,7 @@
 import hashlib
 import math
 import pickle
+import torch.nn.functional as F
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import cache
@@ -28,6 +29,9 @@ from ucm.sparse.esa.retrieval.retrieval_worker import RetrievalWorker
 from ucm.sparse.kvstar.utils import get_bind_cpus_for_rank
 from ucm.store.ucmstore import Task, UcmKVStoreBase
 from ucm.utils import Config
+from ucm.logger import init_logger
+
+logger = init_logger(__name__)
 
 ReqType = Union[str, int]
 HashType = Union[str, int]
@@ -237,6 +241,9 @@ class ReqStatePerLayer:
         self.is_mla = self.vllm_config.model_config.is_deepseek_mla
         self.step = 0
 
+        self.prev_query_repr: Optional[torch.Tensor] = None
+        self.similarity_threshold = self.esa_cfg.get("similarity_threshold", 0.8)
+
     def update_meta(self, req_meta: ReqMeta):
         self.req_meta = req_meta
 
@@ -347,6 +354,104 @@ class ReqStatePerLayer:
 
         self.retrieval_task = None
 
+
+    def _prepare_query_repr(self, batch_query: torch.Tensor) -> Optional[torch.Tensor]:
+        """
+        准备 query 表征用于相似度计算
+        1. "mean": mean pooling - 对 heads 维度求平均
+        2. "max": max pooling - 对 heads 维度求最大值
+        3. "concat": concatenate - 拼接 heads 维度
+        """
+        if batch_query is None:
+            return None
+        query_start_loc = self.req_meta.query_start_loc
+        query_len = self.req_meta.num_scheduled_tokens
+        query = batch_query[query_start_loc : query_start_loc + query_len]
+
+        mode = self.esa_cfg.get("query_repr_mode", "mean")
+        
+        # query shape: [num_tokens, num_heads, head_size]
+        if mode == "mean":
+            # Mean pooling: [num_tokens, num_heads, head_size] -> [num_tokens, head_size]
+            query_repr = query.mean(dim=1)
+        elif mode == "max":
+            # Max pooling: [num_tokens, num_heads, head_size] -> [num_tokens, head_size]
+            query_repr = query.max(dim=1)[0]
+        elif mode == "concat":
+            # Concatenate: [num_tokens, num_heads, head_size] -> [num_tokens, num_heads * head_size]
+            num_tokens, num_heads, head_size = query.shape
+            query_repr = query.reshape(num_tokens, num_heads * head_size)
+        else:
+            raise ValueError(
+                f"Unknown query_repr_mode: {mode}. "
+                f"Supported modes: 'mean', 'max', 'concat'"
+            )
+ 
+        return query_repr
+
+    def _compute_query_similarity(
+        self, query_repr: Optional[torch.Tensor]
+    ) -> Optional[float]:
+        """
+        计算当前 query 与上一步 query 的余弦相似度
+        """
+        if query_repr is None or self.prev_query_repr is None:
+            return None
+        
+        if query_repr.shape != self.prev_query_repr.shape:
+            query_repr_flat = query_repr.flatten()
+            prev_query_repr_flat = self.prev_query_repr.flatten()
+            
+            if query_repr_flat.shape[0] != prev_query_repr_flat.shape[0]:
+                logger.warning(
+                    f"Query repr shapes mismatch: {query_repr.shape} vs {self.prev_query_repr.shape}. "
+                    f"Cannot compute similarity."
+                )
+                return None
+            
+            query_repr_vec = query_repr_flat
+            prev_query_repr_vec = prev_query_repr_flat
+        else:
+            if query_repr.ndim > 1:
+                query_repr_vec = query_repr.mean(dim=0)
+                prev_query_repr_vec = self.prev_query_repr.mean(dim=0)
+            else:
+                query_repr_vec = query_repr
+                prev_query_repr_vec = self.prev_query_repr
+        
+   
+        similarity = F.cosine_similarity(
+            query_repr_vec.unsqueeze(0),
+            prev_query_repr_vec.unsqueeze(0),
+            dim=1
+        ).item()
+        
+        return similarity
+
+    def _sync_retrieval_and_load(
+        self, query: torch.Tensor, forward_context: ForwardContext, similarity: Optional[float] = None
+    ) -> None:
+        """同步执行检索、load 和更新 KV cache"""
+        request_id = (
+            self.req_meta.request_id
+            if self.req_meta is not None
+            else "unknown"
+        )
+        similarity_info = f" similarity {similarity:.6f}" if similarity is not None else ""
+        logger.info(
+            "req %s step %d layer %d adaptive retrieval triggered%s -> sync retrieval and load",
+            request_id,
+            self.step,
+            self.layer_id,
+            similarity_info,
+        )
+        self._retrieval_step = self.step
+        self.start_retrieval(query, forward_context)
+        self.wait_retrieval_and_start_load()
+        if self.tasks:
+            self.wait_transfer_task_done()
+
+
     def block_repre_data(self):
         self.sparse_range = get_sparse_range(
             self.esa_cfg["init_window_sz"],
@@ -396,34 +501,49 @@ class ReqStatePerLayer:
         forward_context: ForwardContext,
     ) -> None:
         self.maybe_register_static_data(forward_context)
-        if self.step % self.esa_cfg["retrieval_stride"] == 1:
-            if self.step == 1:
-                vllm_block_ids = self.req_meta.vllm_block_ids
-                # NOTE: in Preemption, local_window_start != -self.esa_cfg['local_window_sz']
-                if not self.is_mla:
-                    local_window_sz = self.local_window[0].shape[0]
-                    self.k_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
-                        self.init_window[0]
-                    )
-                    self.v_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
-                        self.init_window[1]
-                    )
-                    self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window[
-                        0
-                    ]
-                    self.v_cache[vllm_block_ids[-local_window_sz:]] = self.local_window[
-                        1
-                    ]
-                else:
-                    local_window_sz = self.local_window.shape[0]
-                    self.k_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
-                        self.init_window
-                    )
-                    self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window
-                self.start_retrieval(query, forward_context)
-                self.wait_retrieval_and_start_load()
+        
+        if self.step == 1:
+            vllm_block_ids = self.req_meta.vllm_block_ids
+            # NOTE: in Preemption, local_window_start != -self.esa_cfg['local_window_sz']
+            if not self.is_mla:
+                local_window_sz = self.local_window[0].shape[0]
+                self.k_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
+                    self.init_window[0]
+                )
+                self.v_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
+                    self.init_window[1]
+                )
+                self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window[
+                    0
+                ]
+                self.v_cache[vllm_block_ids[-local_window_sz:]] = self.local_window[
+                    1
+                ]
+            else:
+                local_window_sz = self.local_window.shape[0]
+                self.k_cache[vllm_block_ids[: self.esa_cfg["init_window_sz"]]] = (
+                    self.init_window
+                )
+                self.k_cache[vllm_block_ids[-local_window_sz:]] = self.local_window
+            self.start_retrieval(query, forward_context)
+            query_repr = self._prepare_query_repr(query)
+            if query_repr is not None:
+                self.prev_query_repr = query_repr
+            self.wait_retrieval_and_start_load()
             if len(self.tasks) > 0:
                 self.wait_transfer_task_done()
+
+        if self.step > 1:
+            query_repr = self._prepare_query_repr(query)
+            similarity = self._compute_query_similarity(query_repr)
+
+            if similarity is not None and similarity < self.similarity_threshold:
+                self._sync_retrieval_and_load(query, forward_context, similarity)
+            
+            if query_repr is not None:
+                self.prev_query_repr = query_repr
+
+        
 
     def attention_finished(
         self,
@@ -438,10 +558,10 @@ class ReqStatePerLayer:
                 self.block_repre_data()
                 self.step += 1
         else:
-            if self.step % self.esa_cfg["retrieval_stride"] == 2:
-                self.start_retrieval(query, forward_context)
-            if self.step % self.esa_cfg["retrieval_stride"] == 0:
-                self.wait_retrieval_and_start_load()
+            # if self.step % self.esa_cfg["retrieval_stride"] == 2:
+            #     self.start_retrieval(query, forward_context)
+            # if self.step % self.esa_cfg["retrieval_stride"] == 0:
+            #     self.wait_retrieval_and_start_load()
             self.step += 1
 
 
