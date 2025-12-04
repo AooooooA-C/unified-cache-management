@@ -141,6 +141,11 @@ def pytest_sessionfinish(session, exitstatus):
 
 # ---------------- Fixtures ----------------
 
+@pytest.fixture(scope="session")
+def config():
+    """Provide access to the global config for tests."""
+    return config_instance.read_config()
+
 
 def pytest_runtest_logreport(report):
     """

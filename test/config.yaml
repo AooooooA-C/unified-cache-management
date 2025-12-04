@@ -9,7 +9,7 @@ reports:
 
 database:
   backup: "results/"
-  enabled: true
+  enabled: false # Enable or disable database connection
   host: "127.0.0.1"
   port: 3306
   name: "ucm_pytest"
@@ -19,9 +19,17 @@ database:
 
 # LLM Connection Configuration
 llm_connection:
-  model: "qwen3"
-  server_url: "http://141.111.32.70:9382"
+  model: "/home/models/QwQ-32B"
+  server_url: "http://127.0.0.1:7800"
   tokenizer_path: "/home/models/QwQ-32B"
   stream: true    # stream output
   ignore_eos: true    # Ignore the returned terminator
   timeout: 180    # request time out
+
+# Sparse Method Accuracy Evaluation Configuration
+accuracy_evaluation:
+  max_samples: null  # null means use all samples, or set a number like 50 for quick testing
+  temperature: 0
+  max_tokens: 2048
+  # Think model support (e.g., QwQ)
+  strip_think: true  # true: extract content after </think> tag; false: use raw output

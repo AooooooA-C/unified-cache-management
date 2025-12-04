@@ -4,3 +4,9 @@ PyYAML>=6.0
 # MySQL
 peewee>=3.14.5
 pymysql>=1.0.2
+pandas>=2.0.3
+# For accuracy evaluation
+jieba>=0.42.1
+fuzzywuzzy>=0.18.0
+rouge>=1.0.1
+requests>=2.31.0
