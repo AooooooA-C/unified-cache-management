@@ -25,7 +25,7 @@ def setup_environment_variables():
     os.environ["VLLM_USE_V1"] = "1"
     os.environ["PYTHONHASHSEED"] = "123456"
     os.environ["ENABLE_SPARSE"] = "true"
-    os.environ["VLLM_HASH_ATTENTION"] = "1"
+    # os.environ["VLLM_HASH_ATTENTION"] = "1"
 
     global model, path_to_dataset, data_dir, tokenizer
     model = os.getenv("MODEL_PATH", "/home/models/DeepSeek-V2-Lite-Chat")
@@ -77,7 +77,7 @@ def build_llm_with_uc(module_path: str, name: str, model: str):
                     },
                 }
             ],
-            "ucm_sparse_config": {"KvCompOnDevice": {}},
+            # "ucm_sparse_config": {"GSAOnDevice": {}},
         },
     )
 
@@ -85,7 +85,7 @@ def build_llm_with_uc(module_path: str, name: str, model: str):
         model=model,
         kv_transfer_config=ktc,
         max_model_len=32768,
-        gpu_memory_utilization=0.8,
+        gpu_memory_utilization=0.45,
         max_num_batched_tokens=30000,
         block_size=128,
         enforce_eager=True,
@@ -143,7 +143,7 @@ def main():
 
     with build_llm_with_uc(module_path, name, model) as llm:
         prompts = []
-        batch_size = 20
+        batch_size = 1
         assert os.path.isfile(
             path_to_dataset
         ), f"Incorrect dataset path. Please specify the dataset path by `export DATASET_PATH=/path/to/longbench/multifieldqa_zh.jsonl`"
@@ -160,6 +160,8 @@ def main():
         )
 
         print_output(llm, prompts, sampling_params, "first")
+        print_output(llm, prompts, sampling_params, "second")
+        print_output(llm, prompts, sampling_params, "third")
 
 
 if __name__ == "__main__":

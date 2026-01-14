@@ -292,7 +292,9 @@ class GSAOnDevice(UcmSparseBase):
 
     def get_layer_attn_metadata(self, forward_context: ForwardContext, layer_name: str):
         attn_meta = forward_context.attn_metadata
-        return attn_meta[layer_name] if isinstance(attn_meta, dict) else attn_meta
+        attn = forward_context.no_compile_layers[layer_name]
+        kv_cache, _ = attn.kv_cache[forward_context.virtual_engine]
+        return attn_meta[layer_name] if isinstance(attn_meta, dict) else attn_meta, kv_cache[0]
 
     def get_layer_state(self, layer_name: str):
         layer_id = int(layer_name.split(".")[2])
@@ -301,6 +303,160 @@ class GSAOnDevice(UcmSparseBase):
             layer_id < len(self.hash_skip_layers) and self.hash_skip_layers[layer_id]
         )
         return is_rollback_layer, is_skip_hash_layer
+    
+    # def get_layer_key_slot_mapping(self, attn_metadata, block_size):
+    #     """
+    #     修复多卡场景下block_id维度错误，返回CUDA设备上的slot index张量
+    #     :param attn_metadata: 包含block_table和seq_lens的元数据对象
+    #     :param block_size: int，每个block包含的slot数量
+    #     :return:
+    #         - all_slot_indices: torch.Tensor (CUDA)，形状 [nums of slots]，一维long张量
+    #         - block_to_slots: dict，{block_id: [slot1, slot2,...]}，保留映射关系
+    #     """
+    #     # 1. 计算有效block数量（确保num_blocks是整数，避免张量类型）
+    #     #attn_metadata.seq_lens.shape 是 torch.Size([10]) 的大小是batch_szie
+    #     num_blocks = attn_metadata.seq_lens // self.block_size
+    #     num_blocks = num_blocks.item() if isinstance(num_blocks, torch.Tensor) else num_blocks
+
+    #     # 2. 提取block id并确保是一维标量张量（核心修复）
+    #     # 先切片，再彻底展平为一维，避免残留维度
+    #     # attn_metadata.block_table.shape 是torch.Size([10, 256]) 这里10 是 batch_szie
+    #     vllm_block_ids = attn_metadata.block_table[:, :num_blocks].flatten()  # 替代squeeze，强制一维
+    #     # 确保在CUDA上（和后续张量设备对齐）
+    #     if vllm_block_ids.device.type != "cuda":
+    #         vllm_block_ids = vllm_block_ids.cuda()
+
+    #     all_slot_indices = []
+    #     block_to_slots = {}  
+
+    #     # 3. 遍历block id（确保每个block_id是标量）
+    #     for idx in range(len(vllm_block_ids)):
+    #         # 用索引取值，确保是0维标量张量
+    #         block_id = vllm_block_ids[idx]
+    #         # 安全转换为整数（兼容标量张量/普通整数）
+    #         block_id_val = block_id.item() if isinstance(block_id, torch.Tensor) else block_id
+
+    #         # 计算当前block的所有slot index
+    #         offsets = range(block_size)
+    #         slot_indices = [block_id_val * block_size + offset for offset in offsets]
+    #         all_slot_indices.extend(slot_indices)
+    #         block_to_slots[block_id_val] = slot_indices
+
+    #     # 4. 创建CUDA上的一维张量
+    #     target_device = torch.cuda.current_device()
+    #     all_slot_indices = torch.tensor(
+    #         all_slot_indices, 
+    #         dtype=torch.long, 
+    #         device=target_device
+    #     )
+
+    #     return all_slot_indices, block_to_slots
+
+    def get_slot_list(
+        self,
+        vllm_block_ids: torch.Tensor,  
+        req_len: torch.Tensor,       
+        block_size: torch.Tensor,    
+    ) -> torch.Tensor:
+        ##prefix_len = seq_len - q_len
+        t = torch.arange(req_len, device=vllm_block_ids.device, dtype=torch.int64)  
+        block_pos = t // block_size                                  
+        slot_in_block = t % block_size                              
+
+        block_id = vllm_block_ids.index_select(0, block_pos)                     
+        global_slot = block_id * block_size + slot_in_block        
+
+        return global_slot
+
+
+
+    def get_layer_key_slot_mapping(self, attn_metadata, key_cache, batch_key, block_size):
+        """
+        支持多batch场景，返回每个batch对应的slot index张量
+        :param attn_metadata: 包含block_table和seq_lens的元数据对象
+        :param block_size: int，每个block包含的slot数量
+        :return:
+            - all_slot_indices: List[torch.Tensor] 或 torch.Tensor，每个batch的slot indices
+            如果所有batch的slot数量相同，返回2D张量 [batch_size, num_slots_per_batch]
+            否则返回列表，每个元素是 [num_slots_i] 的一维张量
+            - block_to_slots: dict，{block_id: [slot1, slot2,...]}，保留映射关系
+        """
+        flattened_key_cache = key_cache.reshape(key_cache.shape[0] * key_cache.shape[1], *key_cache.shape[2:])
+        block_table = attn_metadata.block_table  # shape: [batch_size, max_blocks]
+        batch_size = block_table.shape[0]
+        
+        q_lens = attn_metadata.query_start_loc[1:] -  attn_metadata.query_start_loc[:-1]
+        decode_mask = q_lens == 1
+        prefix_lens  = attn_metadata.seq_lens - q_lens
+
+        
+        all_slot_indices_list = []  # 存储每个batch的slot indices
+        
+        block_to_slots = {}  # 全局block_id到slot indices的映射
+        
+        # 遍历每个batch，向量化处理每个batch内的blocks
+        for batch_idx in range(batch_size):
+            start_loc =attn_metadata.query_start_loc[batch_idx]
+            end_loc = attn_metadata.query_start_loc[batch_idx+1]
+            batch_block_ids = block_table[batch_idx]  # [max_blocks]
+            seq_len = attn_metadata.seq_lens[batch_idx]
+            key = batch_key[start_loc:end_loc]
+            computed_slot_mapping = attn_metadata.slot_mapping[start_loc:end_loc]
+            req_slots = self.get_slot_list(batch_block_ids, seq_len, block_size )
+            all_slot_indices_list.append(req_slots)
+
+
+
+
+        #     non_zero_mask = batch_block_ids != 0
+        #     valid_block_ids = batch_block_ids[non_zero_mask]  # [num_valid_blocks]
+            
+        #     if valid_block_ids.numel() == 0:
+        #         # 如果当前batch没有有效block，创建空张量
+        #         all_slot_indices_list.append(
+        #             torch.tensor([], dtype=torch.long, device=block_table.device)
+        #         )
+        #         continue
+            
+        #     # 向量化计算当前batch所有block的slot indices
+        #     num_valid_blocks = valid_block_ids.shape[0]
+            
+        #     # 扩展valid_block_ids: [num_valid_blocks] -> [num_valid_blocks, block_size]
+        #     block_ids_expanded = valid_block_ids.unsqueeze(1)  # [num_valid_blocks, 1]
+        #     offsets = torch.arange(block_size, device=block_table.device, dtype=torch.long)  # [block_size]
+            
+        #     # 向量化计算：每个block_id生成block_size个slot indices
+        #     batch_slot_indices = block_ids_expanded * block_size + offsets  # [num_valid_blocks, block_size]
+        #     batch_slot_indices = batch_slot_indices.flatten()  # [num_valid_blocks * block_size]
+            
+        #     all_slot_indices_list.append(batch_slot_indices)
+            
+        #     # 更新全局block_to_slots字典（避免重复）
+        #     valid_block_ids_cpu = valid_block_ids.cpu().numpy()
+        #     for i, block_id_val in enumerate(valid_block_ids_cpu):
+        #         block_id_int = int(block_id_val)
+        #         if block_id_int not in block_to_slots:
+        #             start_idx = i * block_size
+        #             end_idx = start_idx + block_size
+        #             slot_indices = batch_slot_indices[start_idx:end_idx].cpu().tolist()
+        #             block_to_slots[block_id_int] = slot_indices
+        
+        # # 尝试将所有batch的slot indices合并为2D张量（如果长度一致）
+        # # 否则返回列表
+        # if len(all_slot_indices_list) == 0:
+        #     # 所有batch都为空，返回空张量
+        #     all_slot_indices = torch.tensor([], dtype=torch.long, device=block_table.device)
+        # else:
+        #     slot_lengths = [slots.numel() for slots in all_slot_indices_list]
+        #     if len(set(slot_lengths)) == 1 and slot_lengths[0] > 0:
+        #         # 所有batch的slot数量相同，可以堆叠为2D张量
+        #         all_slot_indices = torch.stack(all_slot_indices_list, dim=0)  # [batch_size, num_slots_per_batch]
+        #     else:
+        #         # 长度不一致，返回列表
+        #         all_slot_indices = all_slot_indices_list
+        
+        return all_slot_indices_list, block_to_slots
+
 
     def attention_begin(
         self,
@@ -315,7 +471,9 @@ class GSAOnDevice(UcmSparseBase):
         decode_ql_nope: Optional[torch.Tensor] = None,
         decode_q_pe: Optional[torch.Tensor] = None,
     ):
-        attn_metadata = self.get_layer_attn_metadata(forward_context, layer_name)
+        attn_metadata, key_cache = self.get_layer_attn_metadata(forward_context, layer_name)
+        # if layer_name =='model.layers.6.self_attn.attn':
+        #     print(f"layer_name: {layer_name}, key_cache: {key_cache[1][0]}" )
         # TODO: Should mark MTP layer as rollback layer
         is_rollback_layer, is_skip_hash_layer = self.get_layer_state(layer_name)
 
@@ -355,10 +513,35 @@ class GSAOnDevice(UcmSparseBase):
                             self.new_seq_lens = attn_metadata.seq_lens
                             self.is_tensor_computed = True
 
+
+                    
+
+                    ##  attn_metadata.query_start_loc 得到当前 request 的num_scheued_token,  然后得到对应重算的key的值，在decode的时候， 
+
+                    # if layer_name =='model.layers.6.self_attn.attn':
+                    #     print(f"layer_name: {layer_name}, key: {key[0]}" )
+                   
+                    key_cache_slot_mapping, _ = self.get_layer_key_slot_mapping(attn_metadata,key_cache, key, self.block_size)
+                    # total_key_slot_mapping = torch.cat([key_slot_mapping, attn_metadata.slot_mapping], dim=0)
+                    # flattened_key_cache = key_cache.reshape(key_cache.shape[0] * key_cache.shape[1], *key_cache.shape[2:])
+                    # selected_key_tensor = flattened_key_cache[total_key_slot_mapping]
+                    # k_hash_compute = self.hash_encoder.compute_hash(selected_key_tensor).view(
+                    #     torch.bfloat16
+                    # )
+                    # valid_k_hash_token = total_key_slot_mapping.flatten().numel()
+                    #attn_metadata.seq_lens 来获得当前request的 seq_lens
+                    #key的shape 最多只能到max_num_batched_tokens
+                    
                     k_hash_compute = self.hash_encoder.compute_hash(key).view(
                         torch.bfloat16
                     )
                     valid_k_hash_token = attn_metadata.slot_mapping.flatten().numel()
+
+                    ## 这里需要将batch中 request在prefill 阶段，pc 命中时，将pc命中的key + 重算的 key 用于k_hash_compute
+                    #所以输入进去当前的attn_metadata 以及key ，返回重新组织的key 和 slot_mapping
+                    # attn_metadata.query_start_loc 判断 sheculed tokens,
+                    # seq_len query_start_loc -> q_len 比较q_len seq_len - q_len = prefix_len -> > 0 
+
                     reshape_and_cache_khash_triton(
                         k_hash_compute[:valid_k_hash_token],
                         attn_metadata.slot_mapping.flatten(),
@@ -546,7 +729,7 @@ class GSAOnDevice(UcmSparseBase):
         forward_context: ForwardContext,
         phase: Optional[str] = None,
     ) -> None:
-        attn_metadata = self.get_layer_attn_metadata(forward_context, layer_name)
+        attn_metadata,_ = self.get_layer_attn_metadata(forward_context, layer_name)
         if self.is_mla:
             if phase == "decode":
                 # TODO: Should mark MTP layer as rollback layer
@@ -562,6 +745,8 @@ class GSAOnDevice(UcmSparseBase):
             if self.decode_mask.any():
                 attn_metadata.block_table = self.ori_block_table_decode
                 attn_metadata.seq_lens = self.ori_seq_lens_decode
+            # else:
+            #     self.full_key_slotmapping = None
 
     def request_begin(self, request_id: ReqType, prompt_token_ids: List[int]):
         pass

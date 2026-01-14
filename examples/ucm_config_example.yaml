@@ -11,7 +11,7 @@
 ucm_connectors:
   - ucm_connector_name: "UcmNfsStore"
     ucm_connector_config:
-      storage_backends: "/mnt/test"
+      storage_backends: "/home/externals/wangwenxin21/caz/ucm_kv_cache"
       io_direct: false
 
 load_only_first_rank: false
@@ -21,6 +21,8 @@ load_only_first_rank: false
 
 # Sparse attention configuration
 # Format 1: Dictionary format (for methods like ESA, KvComp)
+ucm_sparse_config:
+  GSAOnDevice: {}
 # ucm_sparse_config:
 #   ESA:
 #     init_window_sz: 1
