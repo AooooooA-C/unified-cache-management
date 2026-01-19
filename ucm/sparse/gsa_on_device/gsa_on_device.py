@@ -57,7 +57,7 @@ def gsa_on_device_config_path_for_model(vllm_config) -> str:
     elif "deepseek" in model and "v2" in model:
         rel = "ucm/sparse/gsa_on_device/configs/gsa_on_device_deepseek_v2_lite_config.json"
     elif "qwen3" in model and "30b" in model:
-        rel = "ucm/sparse/gsa_on_device/configs/gsa_on_device_qwen3_coder_30B_A3B_Instruct_FP8.json"
+        rel = "ucm/sparse/gsa_on_device/configs/gsa_on_device_qwen3_coder_30B_A3B_Instruct.json"
     else:
         raise ValueError(f"[GSAOnDevice] Unsupported model for gsa_on_device: {model}")
 
@@ -163,6 +163,9 @@ class GSAOnDevice(UcmSparseBase):
             self.topk_seq_lens = None
             self.topk_seq_lens_qwen = None
             self.decode_mask = None
+
+
+            self.req_to_step ={}
 
             self._k_scale = torch.tensor(1.0, dtype=torch.float32)
 
@@ -816,6 +819,50 @@ class GSAOnDevice(UcmSparseBase):
             1,
         )
         return topk_seq_lens, topk_tile_scheduler_metadata, topk_num_splits
+    
+    # def is_last_chunk(self) -> bool:
+    #     # NOTE: both decode and last chunk-prefill meet `self.num_computed_tokens + self.num_scheduled_tokens >= self.num_tokens`
+    #     return self.num_computed_tokens + self.num_scheduled_tokens >= self.num_tokens
+
+
+    # def build_sparse_meta(
+    #     self, scheduler_output, requests, input_batch, attn_metadata):
+    #     for req_id in input_batch.req_ids:
+    #         is_first_prefill = req_id not in self.req_to_step
+    #         if is_first_prefill:
+    #             self.req_to_step[req_id]=0
+    #         is_prefill = is_first_prefill or self.req_to_step[req_id]==0
+
+    #         # is_last_chunk = is_prefill and  num_computed_tokens + num_scheduled_tokens >= num_tokens
+    #     pass
+
+    #     for (
+    #         req_id,
+    #         num_scheduled_tokens,
+    #     ) in scheduler_output.num_scheduled_tokens.items():
+    #         is_first_prefill = req_id not in self.req_to_step
+    #         is_prefill = is_first_prefill or self.req_to_step[req_id]==0
+    #         is_last_chunk = is_prefill and  requests[req_id].num_computed_tokens + num_scheduled_tokens >= requests[req_id].num_tokens
+    #         is_decode = self.req_to_step[req_id] !=0
+    #         if is_first_prefill:
+    #             self.req_to_step[req_id] = 0
+
+    #         if is_last_chunk:
+    #             self.req_to_step[req_id] +=1
+
+        # 一个batch的request 是 first_prefill:  prefill  decode:
+        # is_first_prefill ： 需要计算 pc 缓存的kv cache 的external_cached_slot 以及external_cached_key,
+                            #然后将external_cached_slot 和new_compute_slot 和 new_compute_key 拼接作为该request的 slot_mapping 和key
+
+        # is prefill: 
+
+        # is_decode： 什么都不用做 直接用 new_compute_slot 和 new_computer_key (通常这里只有1个token, 可以assert 一下)
+
+            
+            
+
+
+            
 
     def build_decode_attention_meta(self, query_start_loc, seq_lens, block_table):
 

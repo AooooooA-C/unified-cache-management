@@ -77,7 +77,11 @@ def build_llm_with_uc(module_path: str, name: str, model: str):
                     },
                 }
             ],
+<<<<<<< HEAD
             # "ucm_sparse_config": {"GSAOnDevice": {}},
+=======
+            "ucm_sparse_config": {"GSAOnDevice": {}},
+>>>>>>> 527f5f7 (backup code)
         },
     )
 
@@ -143,7 +147,7 @@ def main():
 
     with build_llm_with_uc(module_path, name, model) as llm:
         prompts = []
-        batch_size = 1
+        batch_size = 10
         assert os.path.isfile(
             path_to_dataset
         ), f"Incorrect dataset path. Please specify the dataset path by `export DATASET_PATH=/path/to/longbench/multifieldqa_zh.jsonl`"

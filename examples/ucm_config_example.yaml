@@ -23,7 +23,6 @@ load_only_first_rank: false
 # Format 1: Dictionary format (for methods like ESA, KvComp)
 ucm_sparse_config:
   GSAOnDevice: {}
-# ucm_sparse_config:
 #   ESA:
 #     init_window_sz: 1
 #     local_window_sz: 2
