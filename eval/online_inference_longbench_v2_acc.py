@@ -18,6 +18,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
 
 
+code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+maxlen_map = json.loads(open(os.path.join(code_root, "eval/config/model2maxlen.json"), encoding='utf-8').read())
+template_rag = open(os.path.join(code_root,'eval/prompts/0shot_rag.txt'), encoding='utf-8').read()
+template_no_context = open(os.path.join(code_root,'eval/prompts/0shot_no_context.txt'), encoding='utf-8').read()
+template_0shot = open(os.path.join(code_root,'eval/prompts/0shot.txt'), encoding='utf-8').read()
+template_0shot_cot = open(os.path.join(code_root,'eval/prompts/0shot_cot.txt'), encoding='utf-8').read()
+template_0shot_cot_ans = open(os.path.join(code_root,'eval/prompts/0shot_cot_ans.txt'), encoding='utf-8').read()
+
 def call_model_online(
     max_new_tokens: int,
     messages: list,
@@ -446,7 +456,7 @@ def main():
         code_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         template_path = os.path.join(code_root, "eval", "prompts", "0shot.txt")
         if not os.path.isfile(template_path):
-            template_path = "/home/externals/wangwenxin21/caz/LongBench/prompts/0shot.txt"
+            template_path = "unified-cache-management/eval/prompts/0shot.txt"
     else:
         template_path = args.template
 

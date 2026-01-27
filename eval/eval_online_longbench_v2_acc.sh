@@ -18,15 +18,15 @@ SAVE_DIR=""
 DOMAIN=""
 MAX_TOKENS=""
 MAX_CONTEXT_LENGTH=""
-COT_FLAG=1
+COT_FLAG=0
 MAX_SAMPLES=""
 RESUME_FLAG=0
 LOCAL_TOKENIZER=""
 MAX_MODEL_LEN=""
 TIMEOUT=""
-TEMPERATURE=""
+TEMPERATURE=0
 NO_TRUNCATE_FLAG=0
-CONCURRENCY=1
+CONCURRENCY=20
 
 show_help() {
     echo "Usage: bash $0 [options]"
@@ -176,20 +176,6 @@ if [[ "$NO_TRUNCATE_FLAG" == "1" ]]; then
 fi
 echo "--------------------------------------------"
 
-# 检查 LLM 服务是否可用
-echo "检查 LLM 服务连接: $LLM_URL"
-TEST_BODY='{"model":"Qwen3-32B","messages":[{"role":"user","content":"test"}],"max_tokens":1}'
-if ! curl -s --max-time 5 -X POST "${LLM_URL}/chat/completions" \
-    -H "Content-Type: application/json" \
-    -d "$TEST_BODY" > /dev/null 2>&1; then
-    echo "警告: 无法连接到 LLM 服务 $LLM_URL"
-    echo "请确保服务正在运行"
-    read -p "是否继续? (y/n): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-fi
 
 # 构建 Python 命令参数
 PYTHON_ARGS=(

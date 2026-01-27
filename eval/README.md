@@ -13,7 +13,7 @@ We also support testing with [LongBench-v2](https://huggingface.co/datasets/zai-
 pip install jieba fuzzywuzzy rouge
 
 # For online inference (additional packages)
-pip install requests tqdm
+pip install requests tqdm datasets
 ```
 
 #### Test Data Preparation
@@ -37,6 +37,7 @@ Offline inference tests run the model directly using vLLM with sparse attention 
 #### Configure Specific Sparse Method
 
 Settings for different sparse methods are written in a JSON file, for example:
+for ESA
 ```json
 {"ESA": 
     {
@@ -48,7 +49,11 @@ Settings for different sparse methods are written in a JSON file, for example:
     }
 }
 ```
-
+for GSAOnDevice
+```json
+{"GSAOnDevice": {}
+}
+```
 #### 1. LongBench F1 Score Testing
 
 **Script:** `eval_offline_longbench_F1.sh`
@@ -119,7 +124,7 @@ bash eval_offline_longbench_v2_acc.sh \
 - `--max_tokens INT`: Maximum tokens to generate (default: 16384)
 - `--batch_size INT`: Batch size for inference (default: 20)
 - `--max_context_length INT`: Maximum context length (optional)
-- `--cot`: Enable Chain-of-Thought evaluation (default: enabled)
+- `--cot`: Use Chain-of-Thought prompt (default:disabled)
 - `--max_samples INT`: Maximum number of samples to process (optional)
 - `--resume`: Resume from existing output file
 
@@ -128,7 +133,66 @@ bash eval_offline_longbench_v2_acc.sh \
 ### Online Inference Testing
 
 Online inference tests send requests to an LLM service via HTTP API (OpenAI-compatible). This is useful when the model is running as a separate service.
+#### 0. Launching Inference
+Here are the example to launch the Qwen3-32B model service with 4 GPUs or NPUs.  
+- Note: Remove the --enforce-eager parameter for graph mode.
+```shell
+#export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+vllm serve /home/models/Qwen3-32B \
+--served-model-name Qwen3-32B \
+--rope-scaling '{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}' \
+--max-model-len 131072 \
+--tensor-parallel-size 4 \
+--gpu_memory_utilization 0.87 \
+--trust-remote-code \
+--enforce-eager \
+--block_size 128 \
+--port 7800 \
+--no-enable-prefix-caching \
+--disable-log-requests > Qwen3-32B_TP4.log 2>&1 &
 
+```
+Here are the example to launch the Qwen3-Coder-30B-A3B-Instruct-FP8 model with GSAONDEVICE sparse feature service with 4 GPUs or NPUs.  
+
+```shell
+export ENABLE_SPARSE=true
+export VLLM_HASH_ATTENTION=1
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+vllm serve /home/models/Qwen3-Coder-30B-A3B-Instruct-FP8 \
+--served-model-name Qwen3-Coder-30B-A3B-Instruct-FP8 \
+--max-model-len 135168 \
+--tensor-parallel-size 4 \
+--enable-expert-parallel \
+--gpu_memory_utilization 0.87 \
+--trust-remote-code \
+--enforce-eager \
+--block_size 128 \
+--port 7802 \
+--no-enable-prefix-caching \
+--disable-log-requests \
+--kv-transfer-config '{
+    "kv_connector": "UCMConnector",
+    "kv_connector_module_path": "ucm.integration.vllm.ucm_connector",
+    "kv_role": "kv_both",
+    "kv_connector_extra_config": {"UCM_CONFIG_FILE":"./unified-cache-management/examples/ucm_config_example.yaml"}
+}' > Qwen3-Coder-30B-A3B-Instruct-FP8_TP4_gsaondevice.log 2>&1 &
+
+```
+the content of ucm_config_example.yaml as follows:
+```shell
+ucm_connectors:
+  - ucm_connector_name: "UcmNfsStore"
+    ucm_connector_config:
+      storage_backends: "your path to save kvcache"
+      io_direct: false
+
+
+# Sparse attention configuration
+# Format 1: Dictionary format (for methods like ESA, GSAOnDevice)
+ucm_sparse_config:
+  GSAOnDevice: {}
+```
 #### 1. LongBench F1 Score Testing (Online)
 
 **Script:** `eval_online_longbench_F1.sh`
@@ -143,12 +207,12 @@ bash eval_online_longbench_F1.sh
 
 # Run with custom parameters
 bash eval_online_longbench_F1.sh \
-    --model Qwen2.5-14B-Instruct \
+    --model /home/models/Qwen3-Coder-30B-A3B-Instruct-FP8 \
     --llm_url http://127.0.0.1:7800/v1 \
     --data ./data/longbench \
     --save_dir ./ucm_sparse_predictions/longbench_online \
     --strip_think 1 \
-    --local_tokenizer /home/models/Qwen2.5-14B-Instruct \
+    --local_tokenizer /home/models/Qwen3-Coder-30B-A3B-Instruct-FP8 \
     --max_len 32768 \
     --max_tokens 2048 \
     --timeout 30 \
@@ -157,12 +221,12 @@ bash eval_online_longbench_F1.sh \
 ```
 
 **Parameters:**
-- `--model NAME`: Model name for API (default: `Qwen2.5-14B-Instruct`)
+- `--model NAME`: Model name for API (default: `Qwen3-Coder-30B-A3B-Instruct-FP8`)
 - `--llm_url URL`: LLM service base URL (default: `http://127.0.0.1:7800/v1`)
 - `--data PATH`: Path to test data directory (default: `./data/longbench`)
 - `--save_dir PATH`: Directory to save results (default: `./ucm_sparse_predictions/longbench_v2`)
-- `--strip_think 0|1`: Whether to apply strip_think in eval (default: 0)
-- `--local_tokenizer PATH`: Local tokenizer path (optional)
+- `--strip_think 0|1`: Whether to apply strip_think in eval (default: 1)
+- `--local_tokenizer PATH`: Local tokenizer path (default: `/home/models/Qwen3-Coder-30B-A3B-Instruct-FP8`)
 - `--max_len INT`: Maximum input length (default: 32768)
 - `--max_tokens INT`: Maximum generation tokens (default: 2048)
 - `--timeout INT`: Connection timeout in seconds (default: 30)
@@ -227,7 +291,7 @@ bash eval_online_longbench_v2_acc.sh \
 
 ### Results
 
-All result files will be saved in the `eval/ucm_sparse_predictions` folder.
+All result files will be saved in the `eval/ucm_sparse_predictions/LongBench_v2` folder.
 
 Test results of Full Attention (Qwen2.5-14B-Instruct) on LongBench:
 

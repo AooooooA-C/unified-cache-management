@@ -53,9 +53,35 @@ def analyze_longbench_results(input_file: str, output_file: str):
     # use (domain, sub_domain) as key, because the same sub_domain may belong to different domains
     domain_sub_stats = defaultdict(lambda: {"total": 0, "correct": 0})
     
+    # count difficulty statistics
+    difficulty_stats = defaultdict(lambda: {"total": 0, "correct": 0})
+    
+    # count length statistics
+    length_stats = defaultdict(lambda: {"total": 0, "correct": 0})
+    
     for sample in samples:
         domain = sample.get("domain", "Unknown")
         sub_domain = sample.get("sub_domain", "Unknown")
+        
+        # get difficulty and length fields
+        difficulty = sample.get("difficulty", "Unknown")
+        length = sample.get("length", "Unknown")
+        
+        # normalize difficulty values: only "hard" and "easy"
+        if isinstance(difficulty, str):
+            difficulty = difficulty.strip().lower()
+            if difficulty not in ("hard", "easy"):
+                difficulty = "Unknown"
+        else:
+            difficulty = "Unknown"
+        
+        # normalize length values: only "short", "medium", "long"
+        if isinstance(length, str):
+            length = length.strip().lower()
+            if length not in ("short", "medium", "long"):
+                length = "Unknown"
+        else:
+            length = "Unknown"
         
         # process judge field: it can be a boolean value, string "true"/"false" or other formats
         judge_value = sample.get("judge", False)
@@ -76,6 +102,16 @@ def analyze_longbench_results(input_file: str, output_file: str):
         domain_sub_stats[key]["total"] += 1
         if judge:
             domain_sub_stats[key]["correct"] += 1
+        
+        # count difficulty
+        difficulty_stats[difficulty]["total"] += 1
+        if judge:
+            difficulty_stats[difficulty]["correct"] += 1
+        
+        # count length
+        length_stats[length]["total"] += 1
+        if judge:
+            length_stats[length]["correct"] += 1
     
     # prepare output data - use hierarchical structure: first domain, then sub_domains under the domain
     results = []
@@ -106,32 +142,95 @@ def analyze_longbench_results(input_file: str, output_file: str):
                 "Accuracy": sub_stat["correct"] / sub_stat["total"] if sub_stat["total"] > 0 else 0.0
             })
     
-    # create DataFrame
+    # create DataFrame for domain statistics
     df = pd.DataFrame(results)
+    
+    # create DataFrame for difficulty statistics
+    # sort in specific order: easy, hard, then others
+    difficulty_order = ["easy", "hard"]
+    sorted_difficulties = sorted(
+        difficulty_stats.keys(),
+        key=lambda x: (difficulty_order.index(x) if x in difficulty_order else len(difficulty_order), x)
+    )
+    difficulty_results = []
+    for difficulty in sorted_difficulties:
+        stat = difficulty_stats[difficulty]
+        difficulty_results.append({
+            "Difficulty": difficulty,
+            "Total_Samples": stat["total"],
+            "Correct_Count": stat["correct"],
+            "Accuracy": stat["correct"] / stat["total"] if stat["total"] > 0 else 0.0
+        })
+    df_difficulty = pd.DataFrame(difficulty_results)
+    
+    # create DataFrame for length statistics
+    length_results = []
+    # sort length in a specific order: short, medium, long, then others
+    length_order = ["short", "medium", "long"]
+    sorted_lengths = sorted(
+        length_stats.keys(),
+        key=lambda x: (length_order.index(x) if x in length_order else len(length_order), x)
+    )
+    for length in sorted_lengths:
+        stat = length_stats[length]
+        length_results.append({
+            "Length": length,
+            "Total_Samples": stat["total"],
+            "Correct_Count": stat["correct"],
+            "Accuracy": stat["correct"] / stat["total"] if stat["total"] > 0 else 0.0
+        })
+    df_length = pd.DataFrame(length_results)
     
     # save to Excel
     print(f"saving results to: {output_file}")
     with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-        df.to_excel(writer, sheet_name='Statistics', index=False)
-        
-        # set column width and format
-        worksheet = writer.sheets['Statistics']
+        # Domain statistics sheet
+        df.to_excel(writer, sheet_name='Domain_Statistics', index=False)
+        worksheet = writer.sheets['Domain_Statistics']
         worksheet.column_dimensions['A'].width = 40  # Domain
         worksheet.column_dimensions['B'].width = 40    # Sub_Domain
         worksheet.column_dimensions['C'].width = 15    # Total_Samples
         worksheet.column_dimensions['D'].width = 15    # Correct_Count
         worksheet.column_dimensions['E'].width = 15    # Accuracy
         
-        # set number format
+        # Difficulty statistics sheet
+        df_difficulty.to_excel(writer, sheet_name='Difficulty_Statistics', index=False)
+        worksheet_diff = writer.sheets['Difficulty_Statistics']
+        worksheet_diff.column_dimensions['A'].width = 20  # Difficulty
+        worksheet_diff.column_dimensions['B'].width = 15    # Total_Samples
+        worksheet_diff.column_dimensions['C'].width = 15    # Correct_Count
+        worksheet_diff.column_dimensions['D'].width = 15    # Accuracy
+        
+        # Length statistics sheet
+        df_length.to_excel(writer, sheet_name='Length_Statistics', index=False)
+        worksheet_len = writer.sheets['Length_Statistics']
+        worksheet_len.column_dimensions['A'].width = 20  # Length
+        worksheet_len.column_dimensions['B'].width = 15    # Total_Samples
+        worksheet_len.column_dimensions['C'].width = 15    # Correct_Count
+        worksheet_len.column_dimensions['D'].width = 15    # Accuracy
+        
+        # set number format and header style for all sheets
         from openpyxl.styles import Font
         header_font = Font(bold=True)
+        from openpyxl.styles.numbers import FORMAT_PERCENTAGE_00
+        
+        # Domain statistics sheet formatting
         for cell in worksheet[1]:
             cell.font = header_font
-        
-        # set Accuracy column to percentage format
-        from openpyxl.styles.numbers import FORMAT_PERCENTAGE_00
         for row in range(2, len(df) + 2):
             worksheet[f'E{row}'].number_format = FORMAT_PERCENTAGE_00
+        
+        # Difficulty statistics sheet formatting
+        for cell in worksheet_diff[1]:
+            cell.font = header_font
+        for row in range(2, len(df_difficulty) + 2):
+            worksheet_diff[f'D{row}'].number_format = FORMAT_PERCENTAGE_00
+        
+        # Length statistics sheet formatting
+        for cell in worksheet_len[1]:
+            cell.font = header_font
+        for row in range(2, len(df_length) + 2):
+            worksheet_len[f'D{row}'].number_format = FORMAT_PERCENTAGE_00
     
     print(f"analysis completed!")
     print(f"\nstatistics summary:")
@@ -156,6 +255,25 @@ def analyze_longbench_results(input_file: str, output_file: str):
     print(f"  - total correct number: {total_correct}")
     print(f"  - overall accuracy: {total_correct / len(samples) * 100:.2f}%")
     
+    # print difficulty statistics
+    print(f"\ndifficulty statistics:")
+    for difficulty in sorted(difficulty_stats.keys()):
+        stat = difficulty_stats[difficulty]
+        accuracy = stat["correct"] / stat["total"] * 100 if stat["total"] > 0 else 0.0
+        print(f"  - {difficulty}: {stat['correct']}/{stat['total']} = {accuracy:.2f}%")
+    
+    # print length statistics
+    print(f"\nlength statistics:")
+    length_order = ["short", "medium", "long"]
+    sorted_lengths = sorted(
+        length_stats.keys(),
+        key=lambda x: (length_order.index(x) if x in length_order else len(length_order), x)
+    )
+    for length in sorted_lengths:
+        stat = length_stats[length]
+        accuracy = stat["correct"] / stat["total"] * 100 if stat["total"] > 0 else 0.0
+        print(f"  - {length}: {stat['correct']}/{stat['total']} = {accuracy:.2f}%")
+    
     sub_domain_to_domains = defaultdict(set)
     for domain, sub_domain in domain_sub_stats.keys():
         sub_domain_to_domains[sub_domain].add(domain)
@@ -166,7 +284,7 @@ def analyze_longbench_results(input_file: str, output_file: str):
         for sub, doms in sorted(duplicate_subs.items()):
             print(f"  - '{sub}': {sorted(doms)}")
     
-    return df
+    return df, df_difficulty, df_length
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="analyze LongBench v2 results")
@@ -196,8 +314,14 @@ if __name__ == "__main__":
     # ensure output directory exists
     Path(output_file).parent.mkdir(parents=True, exist_ok=True)
     
-    df = analyze_longbench_results(input_file, str(output_file))
+    df, df_difficulty, df_length = analyze_longbench_results(input_file, str(output_file))
     
     # print first 10 rows preview
-    print("\nfirst 10 rows preview:")
+    print("\nfirst 10 rows preview (Domain Statistics):")
     print(df.head(10).to_string())
+    
+    print("\ndifficulty statistics preview:")
+    print(df_difficulty.to_string())
+    
+    print("\nlength statistics preview:")
+    print(df_length.to_string())
