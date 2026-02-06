@@ -1,5 +1,5 @@
 import os
-
+import dataclasses
 import pytest
 from common.capture_utils import export_vars
 from common.config_utils import config_utils as config_instance
