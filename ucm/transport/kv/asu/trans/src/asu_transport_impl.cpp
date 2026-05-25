@@ -28,8 +28,15 @@
 #include <thread>
 #include "asu_transport/asu_transport.h"
 #include "asu_transport/types.h"
+#include "memory_io_backend.h"
 
 namespace UC::ASU {
+
+AsuTransportImpl::AsuTransportImpl(std::unique_ptr<IoBackend> io_backend)
+    : io_backend_(std::move(io_backend))
+{
+    if (!io_backend_) { io_backend_ = CreateMemoryIoBackend(); }
+}
 
 AsuTransportImpl::~AsuTransportImpl() { Shutdown(); }
 
@@ -219,11 +226,39 @@ void AsuTransportImpl::CompleteTask(const TransportTaskContextPtr& ctx)
     }
 
     std::lock_guard<std::mutex> lock(ctx->wait_mu);
-    if (ctx->op_type == TransportOpType::QUERY) {
-        ctx->query_result.exists.assign(ctx->keys.size, 0);
-        ctx->query_result.prefix_hit_keys = 0;
+    Status io_status;
+    switch (ctx->op_type) {
+    case TransportOpType::STORE: {
+        std::vector<KVBuffer> entries_vec(ctx->entries.data,
+                                          ctx->entries.data + ctx->entries.size);
+        io_status = io_backend_->Store(entries_vec, ctx->entry_status);
+        break;
     }
-    ctx->final_status = Status::OK();
+    case TransportOpType::LOAD: {
+        std::vector<KVBuffer> entries_vec(ctx->entries.data,
+                                          ctx->entries.data + ctx->entries.size);
+        io_status = io_backend_->Load(entries_vec, ctx->entry_status);
+        break;
+    }
+    case TransportOpType::QUERY: {
+        std::vector<CacheKey> keys_vec(ctx->keys.data,
+                                       ctx->keys.data + ctx->keys.size);
+        io_status = io_backend_->Query(keys_vec, ctx->query_result);
+        break;
+    }
+    case TransportOpType::DELETE: {
+        std::vector<CacheKey> keys_vec(ctx->keys.data,
+                                       ctx->keys.data + ctx->keys.size);
+        io_status = io_backend_->Delete(keys_vec, ctx->entry_status);
+        break;
+    }
+    default: {
+        io_status = Status::Error(StatusCode::INTERNAL_ERROR, "unknown op type");
+        break;
+    }
+    }
+
+    ctx->final_status = io_status;
     ctx->state.store(TransportTaskState::COMPLETED, std::memory_order_release);
     ctx->cv.notify_all();
 }

@@ -32,6 +32,7 @@ if(BUILD_UNIT_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/common
         ${CMAKE_CURRENT_SOURCE_DIR}/client/src
         ${CMAKE_CURRENT_SOURCE_DIR}/trans/src
+        ${UCM_ROOT_DIR}/ucm/shared/infra
     )
     target_link_libraries(asu.test PRIVATE
         asu_client
