@@ -52,28 +52,22 @@ void PrintBench(const char* label, const BenchResult& r)
                 r.throughput_ops_sec);
 }
 
-// std::unique_ptr<AsuClient> CreateBenchClient()
-// {
-//     auto factory = []() -> std::unique_ptr<AsuTransport> {
-//         return std::make_unique<AsuTransportImpl>(CreateMemoryIoBackend());
-//     };
-//     return CreateAsuClient(factory);
-// }
-
-
 std::unique_ptr<AsuClient> CreateBenchClient()
 {
     auto factory = []() -> std::unique_ptr<AsuTransport> {
-        MockIoBackendOptions options;
-        options.fixed_latency_us = 1000;  // 每次 IO 固定 1ms
-        options.bandwidth_bytes_per_sec = 1024ULL * 1024 * 1024;  // 1GB/s
-        options.jitter_us = 100;  // 0~100us 抖动
-        options.error_rate = 0.0;  // 不注入错误
-
-        return std::make_unique<AsuTransportImpl>(
-            CreateMockIoBackend(options, CreateMemoryIoBackend()));
+        return std::make_unique<AsuTransportImpl>(CreateMemoryIoBackend());
     };
+    return CreateAsuClient(factory);
+}
 
+std::unique_ptr<AsuClient> CreateRdmaMockBenchClient(
+    const std::shared_ptr<MockRdmaStats>& rdma_stats,
+    MockIoBackendOptions options)
+{
+    auto factory = [rdma_stats, options]() -> std::unique_ptr<AsuTransport> {
+        return std::make_unique<AsuTransportImpl>(
+            CreateMockIoBackend(options, CreateMemoryIoBackend(), rdma_stats));
+    };
     return CreateAsuClient(factory);
 }
 
@@ -556,6 +550,203 @@ TEST_F(AsuBenchmarkTest, DeleteUnsupported_VerifyError)
     auto status = client_->DeleteAsync(keys, delete_id);
     ASSERT_EQ(status.code, StatusCode::UNSUPPORTED);
     ASSERT_EQ(delete_id, kInvalidTaskId);
+}
+
+
+
+class AsuRdmaMockBenchmarkTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        rdma_stats_ = std::make_shared<MockRdmaStats>();
+
+        MockIoBackendOptions options;
+        options.enable_rdma_stats = true;
+        options.rdma_per_entry = true;
+
+        // Set to 0 for stable and fast unit tests. Increase this value if you want
+        // to simulate RDMA latency, for example 2/5/10 us per entry/key.
+        options.fixed_latency_us = 0;
+
+        // 0 means no bandwidth-based sleep. To simulate bandwidth, set for example:
+        // 100ULL * 1024 * 1024 * 1024 for 100GB/s.
+        options.bandwidth_bytes_per_sec = 0;
+        options.jitter_us = 0;
+        options.error_rate = 0.0;
+        options.min_query_bytes = 64;
+        options.min_delete_bytes = 64;
+
+        client_ = CreateRdmaMockBenchClient(rdma_stats_, options);
+        ASSERT_NE(client_, nullptr);
+
+        auto status = client_->Init(MakeBenchConfig());
+        ASSERT_TRUE(status.ok()) << status.message;
+    }
+
+    void TearDown() override
+    {
+        if (client_) {
+            auto status = client_->Shutdown();
+            ASSERT_TRUE(status.ok()) << status.message;
+        }
+    }
+
+    std::shared_ptr<MockRdmaStats> rdma_stats_;
+    std::unique_ptr<AsuClient> client_;
+};
+
+TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
+{
+    constexpr std::size_t kCount = 8;
+    constexpr std::size_t kPayloadSize = 4096;
+
+    std::vector<std::vector<std::uint8_t>> payloads;
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-entry-");
+    auto keys = ExtractKeys(entries);
+
+    rdma_stats_->Reset();
+
+    TaskId store_id{kInvalidTaskId};
+    auto status = client_->StoreAsync(entries, store_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    TaskResult store_result;
+    status = WaitWithTimeout(*client_, store_id, 5000, store_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    EXPECT_EQ(rdma_stats_->store_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(rdma_stats_->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+
+    std::vector<std::vector<std::uint8_t>> load_payloads(kCount);
+    std::vector<KVBuffer> load_entries;
+    load_entries.reserve(kCount);
+
+    for (std::size_t i = 0; i < kCount; ++i) {
+        load_payloads[i].resize(kPayloadSize, 0);
+
+        MemoryRegion region;
+        region.memory_type = MemoryType::HOST;
+        region.addr = reinterpret_cast<std::uint64_t>(load_payloads[i].data());
+        region.size = kPayloadSize;
+
+        Buffer buffer;
+        buffer.region = region;
+        load_entries.push_back(KVBuffer{keys[i], buffer});
+    }
+
+    TaskId load_id{kInvalidTaskId};
+    status = client_->LoadAsync(load_entries, load_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    TaskResult load_result;
+    status = WaitWithTimeout(*client_, load_id, 5000, load_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    EXPECT_EQ(rdma_stats_->load_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(rdma_stats_->load_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+
+    for (std::size_t i = 0; i < kCount; ++i) {
+        EXPECT_EQ(std::memcmp(payloads[i].data(), load_payloads[i].data(), kPayloadSize), 0)
+            << "data mismatch for key " << keys[i];
+    }
+
+    QueryOptions opts;
+    opts.timeout_ms = 5000;
+
+    QueryResult qresult;
+    status = client_->Query(keys, opts, qresult);
+    ASSERT_TRUE(status.ok()) << status.message;
+    ASSERT_EQ(qresult.exists.size(), kCount);
+
+    EXPECT_EQ(rdma_stats_->query_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_GE(rdma_stats_->query_bytes.load(std::memory_order_relaxed), kCount * 64);
+
+    for (std::size_t i = 0; i < kCount; ++i) {
+        EXPECT_EQ(qresult.exists[i], 1) << "key should exist: " << keys[i];
+    }
+
+    std::printf("[BENCH][RDMA-MOCK] transfers: store=%llu load=%llu query=%llu\n",
+                static_cast<unsigned long long>(
+                    rdma_stats_->store_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    rdma_stats_->load_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(
+                    rdma_stats_->query_transfers.load(std::memory_order_relaxed)));
+}
+
+TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
+{
+    auto rdma_stats = std::make_shared<MockRdmaStats>();
+
+    MockIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
+
+    // Simulate one RDMA operation per entry/key with fixed 10us latency.
+    options.fixed_latency_us = 10;
+    options.bandwidth_bytes_per_sec = 0;
+    options.jitter_us = 0;
+    options.error_rate = 0.0;
+    options.min_query_bytes = 64;
+    options.min_delete_bytes = 64;
+
+    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    ASSERT_NE(client, nullptr);
+
+    auto status = client->Init(MakeBenchConfig());
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    constexpr std::size_t kCount = 8192;
+    constexpr std::size_t kPayloadSize = 4096;
+
+    std::vector<std::vector<std::uint8_t>> payloads;
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-lat-");
+    auto keys = ExtractKeys(entries);
+
+    auto t0 = Clock::now();
+
+    TaskId store_id{kInvalidTaskId};
+    status = client->StoreAsync(entries, store_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    TaskResult store_result;
+    status = WaitWithTimeout(*client, store_id, 10000, store_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    auto t1 = Clock::now();
+
+    QueryOptions opts;
+    opts.timeout_ms = 10000;
+
+    QueryResult qresult;
+    status = client->Query(keys, opts, qresult);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    auto t2 = Clock::now();
+
+    const double store_ms = Duration(t1 - t0).count() * 1000;
+    const double query_ms = Duration(t2 - t1).count() * 1000;
+
+    std::printf("[BENCH][RDMA-MOCK] Store: entries=%zu payload=%zuB "
+                "rdma_transfers=%llu total=%.3fms\n",
+                kCount, kPayloadSize,
+                static_cast<unsigned long long>(
+                    rdma_stats->store_transfers.load(std::memory_order_relaxed)),
+                store_ms);
+
+    std::printf("[BENCH][RDMA-MOCK] Query: keys=%zu "
+                "rdma_transfers=%llu total=%.3fms\n",
+                kCount,
+                static_cast<unsigned long long>(
+                    rdma_stats->query_transfers.load(std::memory_order_relaxed)),
+                query_ms);
+
+    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(rdma_stats->query_transfers.load(std::memory_order_relaxed), kCount);
+
+    status = client->Shutdown();
+    ASSERT_TRUE(status.ok()) << status.message;
 }
 
 }  // namespace UC::ASU
