@@ -99,6 +99,34 @@ Status AsuClientImpl::Query(const std::vector<CacheKey>& keys, const QueryOption
     result.exists.assign(keys.size(), 0);
     result.prefix_hit_keys = 0;
 
+    std::unordered_map<AsuId, std::vector<std::size_t>> key_groups;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto asu_id = view->router->Pick(keys[i]);
+        key_groups[asu_id].push_back(i);
+    }
+
+    for (const auto& [asu_id, indices] : key_groups) {
+        auto trans_iter = view->transports.find(asu_id);
+        if (trans_iter == view->transports.end()) {
+            return Status::Error(StatusCode::NOT_FOUND, "routed ASU transport not found");
+        }
+
+        std::vector<CacheKey> group_keys;
+        group_keys.reserve(indices.size());
+        for (const auto idx : indices) {
+            group_keys.push_back(keys[idx]);
+        }
+
+        QueryResult group_result;
+        auto status = trans_iter->second->Query(group_keys, options, group_result);
+        if (!status.ok()) { return status; }
+
+        for (std::size_t j = 0; j < indices.size() && j < group_result.exists.size(); ++j) {
+            result.exists[indices[j]] = group_result.exists[j];
+        }
+        result.prefix_hit_keys += group_result.prefix_hit_keys;
+    }
+
     return Status::OK();
 }
 
@@ -279,18 +307,15 @@ bool AsuClientImpl::PollTask(const ClientTaskContextPtr& ctx)
         if (!sub_result.status.ok()) { any_failed = true; }
 
         const auto& original_indices = sub_task.original_indices;
-        for (std::size_t i = 0; i < original_indices.size() && i < sub_result.entry_status.size();
-             ++i) {
+        for (std::size_t i = 0; i < original_indices.size() && i < sub_result.entry_status.size(); ++i) {
             ctx->entry_status[original_indices[i]] = sub_result.entry_status[i];
         }
     }
 
     if (all_done) {
-        ctx->final_status =
-            any_failed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
-                       : Status::OK();
-        ctx->state.store(any_failed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED,
-                         std::memory_order_release);
+        ctx->final_status = any_failed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
+                                       : Status::OK();
+        ctx->state.store(any_failed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED, std::memory_order_release);
         return true;
     }
     return false;

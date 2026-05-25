@@ -63,7 +63,8 @@ private:
         std::unordered_map<AsuId, std::shared_ptr<AsuTransport>> transports;
     };
 
-    Status SubmitAsync(ClientOpType op_type, const std::vector<KVBuffer>& entries, TaskId& task_id);
+    Status SubmitAsync(ClientOpType op_type, const std::vector<KVBuffer>& entries,
+                       TaskId& task_id);
     using ClientTaskContextPtr = std::shared_ptr<ClientTaskContext>;
 
     Status DispatchTask(const ClientTaskContextPtr& ctx);
