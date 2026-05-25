@@ -1,7 +1,6 @@
 #include "asu_client/asu_client.h"
 #include "io_backend.h"
 #include "memory_io_backend.h"
-#include "mock_io_backend.h"
 #include "asu_transport_impl.h"
 #include <algorithm>
 #include <atomic>
@@ -61,12 +60,12 @@ std::unique_ptr<AsuClient> CreateBenchClient()
 }
 
 std::unique_ptr<AsuClient> CreateRdmaMockBenchClient(
-    const std::shared_ptr<MockRdmaStats>& rdma_stats,
+    const std::shared_ptr<MockIoStats>& io_stats,
     MockIoBackendOptions options)
 {
-    auto factory = [rdma_stats, options]() -> std::unique_ptr<AsuTransport> {
+    auto factory = [io_stats, options]() -> std::unique_ptr<AsuTransport> {
         return std::make_unique<AsuTransportImpl>(
-            CreateMockIoBackend(options, CreateMemoryIoBackend(), rdma_stats));
+            CreateMockIoBackend(options, nullptr, io_stats));
     };
     return CreateAsuClient(factory);
 }
@@ -622,7 +621,7 @@ class AsuRdmaMockBenchmarkTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        rdma_stats_ = std::make_shared<MockRdmaStats>();
+        io_stats_ = std::make_shared<MockIoStats>();
 
         MockIoBackendOptions options;
         options.enable_rdma_stats = true;
@@ -640,7 +639,7 @@ protected:
         options.min_query_bytes = 64;
         options.min_delete_bytes = 64;
 
-        client_ = CreateRdmaMockBenchClient(rdma_stats_, options);
+        client_ = CreateRdmaMockBenchClient(io_stats_, options);
         ASSERT_NE(client_, nullptr);
 
         auto status = client_->Init(MakeBenchConfig());
@@ -655,7 +654,7 @@ protected:
         }
     }
 
-    std::shared_ptr<MockRdmaStats> rdma_stats_;
+    std::shared_ptr<MockIoStats> io_stats_;
     std::unique_ptr<AsuClient> client_;
 };
 
@@ -668,7 +667,7 @@ TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
     auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-entry-");
     auto keys = ExtractKeys(entries);
 
-    rdma_stats_->Reset();
+    io_stats_->Reset();
 
     TaskId store_id{kInvalidTaskId};
     auto status = client_->StoreAsync(entries, store_id);
@@ -678,8 +677,8 @@ TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
     status = WaitWithTimeout(*client_, store_id, 5000, store_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    EXPECT_EQ(rdma_stats_->store_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(rdma_stats_->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(io_stats_->store_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(io_stats_->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
 
     std::vector<std::vector<std::uint8_t>> load_payloads(kCount);
     std::vector<KVBuffer> load_entries;
@@ -706,8 +705,8 @@ TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
     status = WaitWithTimeout(*client_, load_id, 5000, load_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    EXPECT_EQ(rdma_stats_->load_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(rdma_stats_->load_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(io_stats_->load_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(io_stats_->load_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
 
     for (std::size_t i = 0; i < kCount; ++i) {
         EXPECT_EQ(std::memcmp(payloads[i].data(), load_payloads[i].data(), kPayloadSize), 0)
@@ -722,8 +721,8 @@ TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
     ASSERT_TRUE(status.ok()) << status.message;
     ASSERT_EQ(qresult.exists.size(), kCount);
 
-    EXPECT_EQ(rdma_stats_->query_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_GE(rdma_stats_->query_bytes.load(std::memory_order_relaxed), kCount * 64);
+    EXPECT_EQ(io_stats_->query_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_GE(io_stats_->query_bytes.load(std::memory_order_relaxed), kCount * 64);
 
     for (std::size_t i = 0; i < kCount; ++i) {
         EXPECT_EQ(qresult.exists[i], 1) << "key should exist: " << keys[i];
@@ -731,16 +730,16 @@ TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
 
     std::printf("[BENCH][RDMA-MOCK] transfers: store=%llu load=%llu query=%llu\n",
                 static_cast<unsigned long long>(
-                    rdma_stats_->store_transfers.load(std::memory_order_relaxed)),
+                    io_stats_->store_transfers.load(std::memory_order_relaxed)),
                 static_cast<unsigned long long>(
-                    rdma_stats_->load_transfers.load(std::memory_order_relaxed)),
+                    io_stats_->load_transfers.load(std::memory_order_relaxed)),
                 static_cast<unsigned long long>(
-                    rdma_stats_->query_transfers.load(std::memory_order_relaxed)));
+                    io_stats_->query_transfers.load(std::memory_order_relaxed)));
 }
 
 TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
 {
-    auto rdma_stats = std::make_shared<MockRdmaStats>();
+    auto io_stats = std::make_shared<MockIoStats>();
 
     MockIoBackendOptions options;
     options.enable_rdma_stats = true;
@@ -754,7 +753,7 @@ TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
     options.min_query_bytes = 64;
     options.min_delete_bytes = 64;
 
-    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    auto client = CreateRdmaMockBenchClient(io_stats, options);
     ASSERT_NE(client, nullptr);
 
     auto status = client->Init(MakeBenchConfig());
@@ -795,19 +794,19 @@ TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
                 "rdma_transfers=%llu total=%.3fms\n",
                 kCount, kPayloadSize,
                 static_cast<unsigned long long>(
-                    rdma_stats->store_transfers.load(std::memory_order_relaxed)),
+                    io_stats->store_transfers.load(std::memory_order_relaxed)),
                 store_ms);
 
     std::printf("[BENCH][RDMA-MOCK] Query: keys=%zu "
                 "rdma_transfers=%llu total=%.3fms\n",
                 kCount,
                 static_cast<unsigned long long>(
-                    rdma_stats->query_transfers.load(std::memory_order_relaxed)),
+                    io_stats->query_transfers.load(std::memory_order_relaxed)),
                 query_ms);
 
-    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
-    EXPECT_EQ(rdma_stats->query_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), kCount);
+    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(io_stats->query_transfers.load(std::memory_order_relaxed), kCount);
 
     status = client->Shutdown();
     ASSERT_TRUE(status.ok()) << status.message;
@@ -822,7 +821,7 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
     constexpr std::size_t kEntriesPerTask = 4;
     constexpr std::size_t kPayloadSize = 4096;
 
-    auto rdma_stats = std::make_shared<MockRdmaStats>();
+    auto io_stats = std::make_shared<MockIoStats>();
 
     MockIoBackendOptions options;
     options.enable_rdma_stats = true;
@@ -834,7 +833,7 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
     options.min_query_bytes = 64;
     options.min_delete_bytes = 64;
 
-    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    auto client = CreateRdmaMockBenchClient(io_stats, options);
     ASSERT_NE(client, nullptr);
 
     auto status = client->Init(MakeBenchConfig(kTransportNum));
@@ -862,8 +861,8 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
     auto t1 = Clock::now();
 
     const auto expected_entry_count = kTaskCount * kEntriesPerTask;
-    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), expected_entry_count);
-    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
+    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), expected_entry_count);
+    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
 
     std::vector<CacheKey> all_keys;
     all_keys.reserve(expected_entry_count);
@@ -885,7 +884,7 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
 
     auto t2 = Clock::now();
 
-    EXPECT_EQ(rdma_stats->query_transfers.load(std::memory_order_relaxed), expected_entry_count);
+    EXPECT_EQ(io_stats->query_transfers.load(std::memory_order_relaxed), expected_entry_count);
 
     std::vector<StressTaskData> load_tasks;
     load_tasks.reserve(kTaskCount);
@@ -906,8 +905,8 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
 
     auto t3 = Clock::now();
 
-    EXPECT_EQ(rdma_stats->load_transfers.load(std::memory_order_relaxed), expected_entry_count);
-    EXPECT_EQ(rdma_stats->load_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
+    EXPECT_EQ(io_stats->load_transfers.load(std::memory_order_relaxed), expected_entry_count);
+    EXPECT_EQ(io_stats->load_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
 
     for (std::size_t task_idx : {std::size_t{0}, kTaskCount / 2, kTaskCount - 1}) {
         for (std::size_t entry_idx = 0; entry_idx < kEntriesPerTask; ++entry_idx) {
@@ -926,9 +925,9 @@ TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
     std::printf("[STRESS][RDMA-MOCK] transports=%zu tasks=%zu entries_per_task=%zu payload=%zuB\n",
                 kTransportNum, kTaskCount, kEntriesPerTask, kPayloadSize);
     std::printf("[STRESS][RDMA-MOCK] store_transfers=%llu load_transfers=%llu query_transfers=%llu\n",
-                static_cast<unsigned long long>(rdma_stats->store_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(rdma_stats->load_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(rdma_stats->query_transfers.load(std::memory_order_relaxed)));
+                static_cast<unsigned long long>(io_stats->store_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(io_stats->load_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(io_stats->query_transfers.load(std::memory_order_relaxed)));
     std::printf("[STRESS][RDMA-MOCK] store=%.3fms query=%.3fms load=%.3fms total=%.3fms\n",
                 store_ms, query_ms, load_ms, total_ms);
 
@@ -946,7 +945,7 @@ TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
     constexpr std::size_t kTotalOps = kThreadNum * kOpsPerThread;
     constexpr std::size_t kTotalEntries = kTotalOps * kEntriesPerOp;
 
-    auto rdma_stats = std::make_shared<MockRdmaStats>();
+    auto io_stats = std::make_shared<MockIoStats>();
 
     MockIoBackendOptions options;
     options.enable_rdma_stats = true;
@@ -958,7 +957,7 @@ TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
     options.min_query_bytes = 64;
     options.min_delete_bytes = 64;
 
-    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    auto client = CreateRdmaMockBenchClient(io_stats, options);
     ASSERT_NE(client, nullptr);
 
     auto status = client->Init(MakeBenchConfig(kTransportNum));
@@ -1015,8 +1014,8 @@ TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
     EXPECT_EQ(ok_ops, kTotalOps);
 
     const auto expected_store_transfers = ok_ops * kEntriesPerOp;
-    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), expected_store_transfers);
-    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), expected_store_transfers * kPayloadSize);
+    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), expected_store_transfers);
+    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), expected_store_transfers * kPayloadSize);
 
     std::vector<std::vector<std::uint8_t>> load_payloads(kTotalEntries);
     std::vector<KVBuffer> load_entries;
@@ -1067,7 +1066,7 @@ TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
                 kThreadNum, kOpsPerThread, kEntriesPerOp, kPayloadSize);
     std::printf("[STRESS][RDMA-MOCK][MT] success_ops=%zu failed_ops=%zu store_transfers=%llu total=%.3fms throughput=%.1f ops/sec\n",
                 ok_ops, bad_ops,
-                static_cast<unsigned long long>(rdma_stats->store_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(io_stats->store_transfers.load(std::memory_order_relaxed)),
                 total_ms, ops_per_sec);
     std::printf("[STRESS][RDMA-MOCK][MT] integrity_check: entries=%zu failures=%zu\n",
                 kTotalEntries, integrity_failures);

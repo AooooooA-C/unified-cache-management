@@ -307,28 +307,15 @@ bool AsuClientImpl::PollTask(const ClientTaskContextPtr& ctx)
         if (!sub_result.status.ok()) { any_failed = true; }
 
         const auto& original_indices = sub_task.original_indices;
-<<<<<<< HEAD
-        for (std::size_t i = 0; i < original_indices.size() && i < sub_result.entry_status.size();
-             ++i) {
-=======
         for (std::size_t i = 0; i < original_indices.size() && i < sub_result.entry_status.size(); ++i) {
->>>>>>> feat/pod
             ctx->entry_status[original_indices[i]] = sub_result.entry_status[i];
         }
     }
 
     if (all_done) {
-<<<<<<< HEAD
-        ctx->final_status =
-            any_failed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
-                       : Status::OK();
-        ctx->state.store(any_failed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED,
-                         std::memory_order_release);
-=======
         ctx->final_status = any_failed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
                                        : Status::OK();
         ctx->state.store(any_failed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED, std::memory_order_release);
->>>>>>> feat/pod
         return true;
     }
     return false;

@@ -29,6 +29,7 @@
 #include <thread>
 #include <unordered_map>
 #include "asu_transport/asu_transport.h"
+#include "io_backend.h"
 #include "template/spsc_ring_queue.h"
 #include "transport_task_manager.h"
 
