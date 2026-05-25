@@ -29,6 +29,7 @@
 #include <thread>
 #include <unordered_map>
 #include "asu_transport/asu_transport.h"
+#include "io_backend.h"
 #include "transport_task_manager.h"
 #include "template/spsc_ring_queue.h"
 
@@ -36,7 +37,7 @@ namespace UC::ASU {
 
 class AsuTransportImpl final : public AsuTransport {
 public:
-    AsuTransportImpl() = default;
+    explicit AsuTransportImpl(std::unique_ptr<IoBackend> io_backend = nullptr);
     ~AsuTransportImpl() override;
 
     Status Init(const TransportConfig& config) override;
@@ -82,6 +83,7 @@ private:
     std::atomic_bool stop_{false};
 
     std::unordered_map<MRHandle, MemoryRegion> registered_regions_;
+    std::unique_ptr<IoBackend> io_backend_;
 };
 
 }  // namespace UC::ASU

@@ -99,6 +99,34 @@ Status AsuClientImpl::Query(const std::vector<CacheKey>& keys, const QueryOption
     result.exists.assign(keys.size(), 0);
     result.prefix_hit_keys = 0;
 
+    std::unordered_map<AsuId, std::vector<std::size_t>> key_groups;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto asu_id = view->router->Pick(keys[i]);
+        key_groups[asu_id].push_back(i);
+    }
+
+    for (const auto& [asu_id, indices] : key_groups) {
+        auto trans_iter = view->transports.find(asu_id);
+        if (trans_iter == view->transports.end()) {
+            return Status::Error(StatusCode::NOT_FOUND, "routed ASU transport not found");
+        }
+
+        std::vector<CacheKey> group_keys;
+        group_keys.reserve(indices.size());
+        for (const auto idx : indices) {
+            group_keys.push_back(keys[idx]);
+        }
+
+        QueryResult group_result;
+        auto status = trans_iter->second->Query(group_keys, options, group_result);
+        if (!status.ok()) { return status; }
+
+        for (std::size_t j = 0; j < indices.size() && j < group_result.exists.size(); ++j) {
+            result.exists[indices[j]] = group_result.exists[j];
+        }
+        result.prefix_hit_keys += group_result.prefix_hit_keys;
+    }
+
     return Status::OK();
 }
 

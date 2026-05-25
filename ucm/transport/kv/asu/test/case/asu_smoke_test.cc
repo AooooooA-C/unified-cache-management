@@ -125,6 +125,14 @@ TEST(AsuSmokeTest, ClientAsyncTasksCompleteEndToEnd)
 
     status = client->Shutdown();
     ASSERT_TRUE(status.ok()) << status.message;
+
+    // 验证关闭后不能再提交任务
+    TaskId post_shutdown_task{kInvalidTaskId};
+    status = client->LoadAsync(entries, post_shutdown_task);
+    ASSERT_EQ(status.code, StatusCode::NOT_INITIALIZED);
+    ASSERT_EQ(post_shutdown_task, kInvalidTaskId);
+
+    
 }
 
 }  // namespace UC::ASU
