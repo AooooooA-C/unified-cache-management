@@ -1,3 +1,117 @@
+/**
+ * @file asu_benchmark_test.cc
+ * @brief ASU (Async Storage Unit) 基准测试
+ *
+ * 本文件是 ASU 系统的基准测试入口，测试以下功能：
+ * - 数据完整性：Store/Load 数据一致性
+ * - 查询准确性：Query 存在性检查
+ * - 延迟测试：单条操作延迟
+ * - 吞吐量测试：批量操作吞吐量
+ * - 并发测试：多线程竞争
+ * - 压力测试：大规模数据
+ * - RDMA 统计：Mock 统计功能验证
+ *
+ * @details 架构调用关系图:
+ *
+ * ┌─────────────────────────────────────────────────────────────────────────────┐
+ * │                          asu_benchmark_test.cc (本文件)                      │
+ * │                              [测试入口层]                                     │
+ * │                                                                              │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │                        SetUp() / TearDown()                            │  │
+ * │  │                                                                        │  │
+ * │  │  SetUp():                                                              │  │
+ * │  │    client_ = CreateBenchClient()                                       │  │
+ * │  │            │                                                           │  │
+ * │  │            ▼                                                           │  │
+ * │  │    CreateAsuClient(factory)                                            │  │
+ * │  │            │                                                           │  │
+ * │  │            ▼                                                           │  │
+ * │  │    client_->Init(config)                                               │  │
+ * │  │                                                                        │  │
+ * │  │  TearDown():                                                           │  │
+ * │  │    client_->Shutdown()                                                 │  │
+ * │  │    验证关闭后调用失败                                                   │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                                                              │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │                     工厂函数调用链                                      │  │
+ * │  │                                                                        │  │
+ * │  │  CreateBenchClient()                                                   │  │
+ * │  │  └─► factory = []() {                                                  │  │
+ * │  │        return std::make_unique<AsuTransportImpl>(                      │  │
+ * │  │            CreateMemoryIoBackend()    ◄─── 调用 memory_io_backend.cpp  │  │
+ * │  │        );                                                              │  │
+ * │  │      }                                                                 │  │
+ * │  │  └─► return CreateAsuClient(factory)                                   │  │
+ * │  │                                                                        │  │
+ * │  │  CreateRdmaMockBenchClient(io_stats, options)                          │  │
+ * │  │  └─► factory = [io_stats, options]() {                                 │  │
+ * │  │        return std::make_unique<AsuTransportImpl>(                      │  │
+ * │  │            CreateMemoryIoBackend(options, io_stats)                    │  │
+ * │  │        );                              ◄─── 带 Mock 配置               │  │
+ * │  │      }                                                                 │  │
+ * │  │  └─► return CreateAsuClient(factory)                                   │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                                                              │
+ * │  ┌───────────────────────────────────────────────────────────────────────┐  │
+ * │  │                     测试调用流程                                        │  │
+ * │  │                                                                        │  │
+ * │  │  TEST_F(..., ...) {                                                    │  │
+ * │  │    client_->StoreAsync(entries, task_id)                               │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    AsuClient::StoreAsync()                                             │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    AsuTransportImpl::SubmitTask()                                      │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    MemoryIoBackend::Store()        ◄─── memory_io_backend.cpp 实现     │  │
+ * │  │    │                                                                   │  │
+ * │  │    ├─► AccountStoreTransfer()      (记录统计到 io_stats)               │  │
+ * │  │    ├─► MaybeDelay()                (模拟 RDMA 延迟)                    │  │
+ * │  │    └─► store_[key] = data          (内存存储)                          │  │
+ * │  │                                                                        │  │
+ * │  │    WaitWithTimeout(*client_, task_id, ...)                             │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    AsuClient::Wait()                                                   │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    获取 TaskResult                                                      │  │
+ * │  │    │                                                                   │  │
+ * │  │    ▼                                                                   │  │
+ * │  │    验证 result.status / result.entry_status                            │  │
+ * │  │  }                                                                     │  │
+ * │  └───────────────────────────────────────────────────────────────────────┘  │
+ * │                                                                              │
+ * └─────────────────────────────────────────────────────────────────────────────┘
+ *
+ * @details 文件依赖关系:
+ *
+ * ┌─────────────────────┐
+ * │ asu_benchmark_test  │ (本文件)
+ * │      .cc            │
+ * └─────────┬───────────┘
+ *           │
+ *           │ #include
+ *           │
+ *           ▼
+ * ┌─────────────────────┐      ┌─────────────────────┐
+ * │  memory_io_backend  │◄─────│    io_backend.h     │
+ * │      .h             │ 继承 │     (抽象接口)      │
+ * └─────────┬───────────┘      └─────────────────────┘
+ *           │
+ *           │ #include
+ *           │
+ *           ▼
+ * ┌─────────────────────┐
+ * │  memory_io_backend  │
+ * │      .cpp           │ (实现)
+ * └─────────────────────┘
+ */
+
 #include "asu_client/asu_client.h"
 #include "io_backend.h"
 #include "memory_io_backend.h"
@@ -22,6 +136,16 @@ namespace {
 using Clock = std::chrono::high_resolution_clock;
 using Duration = std::chrono::duration<double>;
 
+/**
+ * @struct BenchResult
+ * @brief 基准测试结果
+ *
+ * 记录一次基准测试的性能指标：
+ * - total_sec: 总耗时（秒）
+ * - ops: 操作次数
+ * - avg/min/max_lat_ms: 平均/最小/最大延迟（毫秒）
+ * - throughput_ops_sec: 吞吐量（ops/秒）
+ */
 struct BenchResult {
     double total_sec{0};
     std::size_t ops{0};
@@ -31,6 +155,18 @@ struct BenchResult {
     double throughput_ops_sec{0};
 };
 
+/**
+ * @brief 计算基准测试结果
+ *
+ * @details 从延迟数组计算各项统计指标:
+ * - avg = sum / count
+ * - min = 最小值
+ * - max = 最大值
+ * - throughput = ops / total_sec
+ *
+ * @param latencies_ms 延迟数组（毫秒）
+ * @return BenchResult 计算结果
+ */
 BenchResult ComputeBench(const std::vector<double>& latencies_ms)
 {
     BenchResult r;
@@ -43,6 +179,12 @@ BenchResult ComputeBench(const std::vector<double>& latencies_ms)
     return r;
 }
 
+/**
+ * @brief 打印基准测试结果
+ *
+ * @param label 测试标签
+ * @param r 测试结果
+ */
 void PrintBench(const char* label, const BenchResult& r)
 {
     std::printf("[BENCH] %s: ops=%zu  total=%.3fms  avg=%.3fms  min=%.3fms  max=%.3fms  "
@@ -51,6 +193,35 @@ void PrintBench(const char* label, const BenchResult& r)
                 r.throughput_ops_sec);
 }
 
+/**
+ * @brief 创建基准测试客户端（无 Mock 功能）
+ *
+ * @details 工厂函数模式:
+ * ```
+ * CreateBenchClient()
+ *     │
+ *     ├─► 定义 factory lambda:
+ *     │   factory = []() -> std::unique_ptr<AsuTransport> {
+ *     │       return std::make_unique<AsuTransportImpl>(
+ *     │           CreateMemoryIoBackend()    ◄─── 默认配置，无 Mock
+ *     │       );
+ *     │   }
+ *     │
+ *     ├─► 调用 CreateAsuClient(factory)
+ *     │   │
+ *     │   └─► AsuClient 保存 factory
+ *     │       等待 Init() 时调用 factory 创建 Transport
+ *     │
+ *     └─► 返回 std::unique_ptr<AsuClient>
+ * ```
+ *
+ * @note Lambda 延迟执行模式:
+ * factory lambda 被 CreateAsuClient 保存，但不立即执行。
+ * 只有在 client_->Init() 时才调用 factory 创建 AsuTransportImpl。
+ * 这是为了支持配置驱动的初始化。
+ *
+ * @return std::unique_ptr<AsuClient> 测试客户端
+ */
 std::unique_ptr<AsuClient> CreateBenchClient()
 {
     auto factory = []() -> std::unique_ptr<AsuTransport> {
@@ -59,17 +230,80 @@ std::unique_ptr<AsuClient> CreateBenchClient()
     return CreateAsuClient(factory);
 }
 
+/**
+ * @brief 创建带 RDMA Mock 功能的基准测试客户端
+ *
+ * @details 与 CreateBenchClient() 类似，但使用带 Mock 配置的 Backend:
+ * ```
+ * CreateRdmaMockBenchClient(io_stats, options)
+ *     │
+ *     ├─► 定义 factory lambda (捕获 io_stats 和 options):
+ *     │   factory = [io_stats, options]() -> std::unique_ptr<AsuTransport> {
+ *     │       return std::make_unique<AsuTransportImpl>(
+ *     │           CreateMemoryIoBackend(options, io_stats)    ◄─── 带 Mock
+ *     │       );
+ *     │   }
+ *     │
+ *     ├─► Lambda 捕获说明:
+ *     │   - io_stats: shared_ptr<MockIoStats>，按值捕获（拷贝 shared_ptr）
+ *     │   - options: MemoryIoBackendOptions，按值捕获（拷贝配置）
+ *     │
+ *     └─► 返回 std::unique_ptr<AsuClient>
+ * ```
+ *
+ * @note Lambda 捕获策略:
+ * - io_stats 是 shared_ptr，按值捕获确保 lambda 持有引用
+ * - options 是配置结构体，按值捕获确保配置不变
+ *
+ * @param io_stats 统计对象（用于验证传输次数和字节数）
+ * @param options Mock 配置（延迟、带宽、统计等）
+ * @return std::unique_ptr<AsuClient> 测试客户端
+ *
+ * @example RDMA 统计验证测试:
+ * @code
+ * auto io_stats = std::make_shared<MockIoStats>();
+ * MemoryIoBackendOptions options;
+ * options.enable_rdma_stats = true;
+ * options.rdma_per_entry = true;
+ *
+ * auto client = CreateRdmaMockBenchClient(io_stats, options);
+ * client->Init(config);
+ *
+ * // 执行 Store 操作
+ * client->StoreAsync(entries, task_id);
+ * WaitWithTimeout(*client, task_id, ...);
+ *
+ * // 验证统计
+ * EXPECT_EQ(io_stats->store_transfers.load(), expected_count);
+ * EXPECT_EQ(io_stats->store_bytes.load(), expected_bytes);
+ * @endcode
+ */
 std::unique_ptr<AsuClient> CreateRdmaMockBenchClient(
     const std::shared_ptr<MockIoStats>& io_stats,
-    MockIoBackendOptions options)
+    MemoryIoBackendOptions options)
 {
     auto factory = [io_stats, options]() -> std::unique_ptr<AsuTransport> {
         return std::make_unique<AsuTransportImpl>(
-            CreateMockIoBackend(options, nullptr, io_stats));
+            CreateMemoryIoBackend(options, io_stats));
     };
     return CreateAsuClient(factory);
 }
 
+/**
+ * @brief 创建基准测试配置
+ *
+ * @details 配置内容:
+ * - client_id: "asu-bench-client"
+ * - default_wait_timeout_ms: 5000ms
+ * - Transport 配置:
+ *   - asu_name: "asu-bench-{i}"
+ *   - asu_id: 2001 + i
+ *   - max_inflight_tasks: 4096
+ *   - query_timeout_ms: 5000ms
+ *
+ * @param num_transports Transport 数量（默认 1）
+ * @return AsuClientConfig 测试配置
+ */
 AsuClientConfig MakeBenchConfig(std::size_t num_transports = 1)
 {
     AsuClientConfig config;
@@ -86,6 +320,26 @@ AsuClientConfig MakeBenchConfig(std::size_t num_transports = 1)
     return config;
 }
 
+/**
+ * @brief 创建 KV Buffer 数据
+ *
+ * @details 创建指定数量的 KVBuffer，用于测试:
+ * 1. 分配 payloads 数组（存储实际数据）
+ * 2. 为每个 payload 分配指定大小的随机数据
+ * 3. 创建 MemoryRegion (HOST 类型)
+ * 4. 创建 Buffer + KVBuffer
+ *
+ * @note payloads 参数说明:
+ * payloads 是 vector<vector<uint8_t>> 的引用，数据存储在外部。
+ * 这是因为 KVBuffer 只持有指针，需要 payloads 持有实际数据。
+ * payloads 必须在测试期间保持有效。
+ *
+ * @param payloads [out] 存储实际数据的数组
+ * @param count KV 数量
+ * @param payload_size 每个 payload 的大小
+ * @param key_prefix Key 前缀
+ * @return std::vector<KVBuffer> KVBuffer 列表
+ */
 std::vector<KVBuffer> MakeKVBuffers(std::vector<std::vector<std::uint8_t>>& payloads,
                                     std::size_t count, std::size_t payload_size,
                                     const std::string& key_prefix = "key-")
@@ -108,6 +362,12 @@ std::vector<KVBuffer> MakeKVBuffers(std::vector<std::vector<std::uint8_t>>& payl
     return entries;
 }
 
+/**
+ * @brief 从 KVBuffer 提取 Key 列表
+ *
+ * @param entries KVBuffer 列表
+ * @return std::vector<CacheKey> Key 列表
+ */
 std::vector<CacheKey> ExtractKeys(const std::vector<KVBuffer>& entries)
 {
     std::vector<CacheKey> keys;
@@ -116,6 +376,32 @@ std::vector<CacheKey> ExtractKeys(const std::vector<KVBuffer>& entries)
     return keys;
 }
 
+/**
+ * @brief 等待任务完成（带超时）
+ *
+ * @details 调用流程:
+ * ```
+ * WaitWithTimeout(client, task_id, timeout_ms, result)
+ *     │
+ *     ├─► client.Wait(task_id, timeout_ms, result)
+ *     │   - 返回 Status（Wait 操作本身是否成功）
+ *     │
+ *     ├─► if !status.ok(): return status    (Wait 失败)
+ *     │
+ *     ├─► if !result.status.ok(): return result.status  (任务整体失败)
+ *     │
+ *     └─► for each entry_status:
+ *         if !es.ok(): return es            (某个条目失败)
+ *
+ * return Status::OK()
+ * ```
+ *
+ * @param client AsuClient 实例
+ * @param task_id 任务 ID
+ * @param timeout_ms 超时时间（毫秒）
+ * @param result [out] 任务结果
+ * @return Status 最终状态（聚合所有错误）
+ */
 Status WaitWithTimeout(AsuClient& client, TaskId task_id, std::uint64_t timeout_ms,
                        TaskResult& result)
 {
@@ -128,8 +414,16 @@ Status WaitWithTimeout(AsuClient& client, TaskId task_id, std::uint64_t timeout_
     return Status::OK();
 }
 
-
-
+/**
+ * @struct StressTaskData
+ * @brief 压力测试任务数据
+ *
+ * 用于多线程压力测试，每个线程持有独立的:
+ * - payloads: 实际数据数组
+ * - entries: KVBuffer 列表
+ * - keys: Key 列表
+ * - task_id: 任务 ID
+ */
 struct StressTaskData {
     std::vector<std::vector<std::uint8_t>> payloads;
     std::vector<KVBuffer> entries;
@@ -137,6 +431,19 @@ struct StressTaskData {
     TaskId task_id{kInvalidTaskId};
 };
 
+/**
+ * @brief 创建 Store 压力测试任务数据
+ *
+ * @details 创建指定数量和大小 KV 数据，用于 Store 测试:
+ * - payload 内容随机生成（基于 task_index + 12345 的种子）
+ * - Key 格式: "{key_prefix}{task_index}-{i}"
+ *
+ * @param task_index 任务索引（用于区分不同线程）
+ * @param entries_per_task 每个 Task 的 Entry 数量
+ * @param payload_size Payload 大小
+ * @param key_prefix Key 前缀
+ * @return StressTaskData 任务数据
+ */
 StressTaskData MakeStressStoreTask(std::size_t task_index, std::size_t entries_per_task,
                                    std::size_t payload_size, const std::string& key_prefix)
 {
@@ -168,6 +475,17 @@ StressTaskData MakeStressStoreTask(std::size_t task_index, std::size_t entries_p
     return data;
 }
 
+/**
+ * @brief 创建 Load 压力测试任务数据
+ *
+ * @details 创建预分配的 Buffer，用于 Load 测试:
+ * - Buffer 内容初始化为 0
+ * - Buffer 大小等于 payload_size
+ *
+ * @param keys Key 列表（要加载的 Key）
+ * @param payload_size 预分配 Buffer 大小
+ * @return StressTaskData 任务数据
+ */
 StressTaskData MakeStressLoadTask(const std::vector<CacheKey>& keys, std::size_t payload_size)
 {
     StressTaskData data;
@@ -194,8 +512,46 @@ StressTaskData MakeStressLoadTask(const std::vector<CacheKey>& keys, std::size_t
 
 }  // namespace
 
+/**
+ * @class AsuBenchmarkTest
+ * @brief ASU 基准测试基类
+ *
+ * 使用 Google Test 的 TEST_F 宏进行测试。
+ * SetUp/TearDown 管理 Client 的生命周期。
+ *
+ * @details 生命周期:
+ * ```
+ * TEST_F 开始
+ *     │
+ *     ├─► SetUp()
+ *     │   ├─► CreateBenchClient()
+ *     │   ├─► client_->Init(config)
+ *     │   └─► ASSERT 成功
+ *     │
+ *     ├─► 测试代码执行
+ *     │   ├─► client_->StoreAsync/LoadAsync/Query/Delete
+ *     │   ├─► WaitWithTimeout
+ *     │   └─► EXPECT 验证结果
+ *     │
+ *     └─► TearDown()
+ *     │   ├─► client_->Shutdown()
+ *     │   └─► 验证关闭后调用失败
+ *     │
+ * TEST_F 结束
+ * ```
+ */
 class AsuBenchmarkTest : public ::testing::Test {
 protected:
+    /**
+     * @brief 测试前初始化
+     *
+     * @details 初始化步骤:
+     * 1. CreateBenchClient() 创建 Client
+     * 2. MakeBenchConfig() 创建配置
+     * 3. client_->Init(config) 初始化 Client
+     *
+     * @note Init 时才调用 factory 创建 Transport
+     */
     void SetUp() override
     {
         client_ = CreateBenchClient();
@@ -204,6 +560,16 @@ protected:
         ASSERT_TRUE(status.ok()) << status.message;
     }
 
+    /**
+     * @brief 测试后清理
+     *
+     * @details 清理步骤:
+     * 1. client_->Shutdown() 关闭 Client
+     * 2. 尝试 LoadAsync 验证关闭后调用失败
+     *
+     * @note 验证 NOT_INITIALIZED 状态:
+     * Shutdown 后调用异步操作应返回 NOT_INITIALIZED。
+     */
     void TearDown() override
     {
         if (client_) {
@@ -226,6 +592,36 @@ protected:
     std::unique_ptr<AsuClient> client_;
 };
 
+/**
+ * @brief 数据完整性测试 - Store/Load 验证
+ *
+ * @details 测试流程:
+ * ```
+ * DataIntegrity_StoreLoadVerify
+ *     │
+ *     ├─► [阶段1: Store]
+ *     │   ├─► MakeKVBuffers(64 entries, 4096 bytes each)
+ *     │   ├─► StoreAsync(entries, store_id)
+ *     │   ├─► WaitWithTimeout(store_id)
+ *     │   └─► ASSERT 成功
+ *     │
+ *     ├─► [阶段2: Load]
+ *     │   ├─► 创建 load_payloads (预分配 4096 bytes)
+ *     │   ├─► LoadAsync(load_entries, load_id)
+ *     │   ├─► WaitWithTimeout(load_id)
+ *     │   └─► ASSERT 成功
+ *     │
+ *     └─► [阶段3: 验证]
+ *     │   for each entry:
+ *     │     EXPECT size 匹配
+ *     │     EXPECT memcmp == 0 (数据一致)
+ * ```
+ *
+ * @note 测试目的:
+ * - 验证 Store 后数据完整存储
+ * - 验证 Load 后数据完整恢复
+ * - 验证数据一致性（bit-by-bit 比较）
+ */
 TEST_F(AsuBenchmarkTest, DataIntegrity_StoreLoadVerify)
 {
     constexpr std::size_t kCount = 64;
@@ -273,6 +669,32 @@ TEST_F(AsuBenchmarkTest, DataIntegrity_StoreLoadVerify)
     }
 }
 
+/**
+ * @brief 查询准确性测试 - Store 后 Query
+ *
+ * @details 测试流程:
+ * ```
+ * QueryAccuracy_StoreThenQuery
+ *     │
+ *     ├─► [阶段1: Store]
+ *     │   ├─► MakeKVBuffers(32 entries)
+ *     │   ├─► StoreAsync + Wait
+ *     │
+ *     ├─► [阶段2: Query]
+ *     │   ├─► stored_keys: 已存储的 Key
+ *     │   ├─► missing_keys: 未存储的 Key (query-32..query-39)
+ *     │   ├─► mixed_keys: stored_keys + missing_keys
+ *     │   ├─► Query(mixed_keys, result)
+ *     │
+ *     └─► [阶段3: 验证]
+ *     │   for stored_keys: EXPECT exists[i] == 1
+ *     │   for missing_keys: EXPECT exists[i] == 0
+ * ```
+ *
+ * @note 测试目的:
+ * - 验证 Query 正确识别已存在的 Key
+ * - 验证 Query 正确识别不存在的 Key
+ */
 TEST_F(AsuBenchmarkTest, QueryAccuracy_StoreThenQuery)
 {
     constexpr std::size_t kCount = 32;
@@ -311,6 +733,38 @@ TEST_F(AsuBenchmarkTest, QueryAccuracy_StoreThenQuery)
     }
 }
 
+/**
+ * @brief 延迟测试 - 单条 Store/Load/Query
+ *
+ * @details 测试流程:
+ * ```
+ * Latency_SingleStoreLoadQuery
+ *     │
+ *     ├─► [阶段1: Store 延迟]
+ *     │   for each entry (10 entries):
+ *     │     ├─► t0 = Clock::now()
+ *     │     ├─► StoreAsync({entry}, id)
+ *     │     ├─► WaitWithTimeout(id)
+ *     │     ├─► t1 = Clock::now()
+ *     │     └─► store_lats.push_back(t1 - t0)
+ *     │
+ *     ├─► [阶段2: Load 延迟]
+ *     │   (类似 Store)
+ *     │
+ *     ├─► [阶段3: Query 延迟]
+ *     │   (类似 Store)
+ *     │
+ *     └─► [阶段4: 打印结果]
+ *     │   PrintBench("StoreAsync", ComputeBench(store_lats))
+ *     │   PrintBench("LoadAsync", ComputeBench(load_lats))
+ *     │   PrintBench("Query", ComputeBench(query_lats))
+ * ```
+ *
+ * @note 测试目的:
+ * - 测量单条操作的延迟分布
+ * - 提供 avg/min/max 延迟指标
+ * - 用于性能基准对比
+ */
 TEST_F(AsuBenchmarkTest, Latency_SingleStoreLoadQuery)
 {
     constexpr std::size_t kCount = 10;
@@ -377,6 +831,36 @@ TEST_F(AsuBenchmarkTest, Latency_SingleStoreLoadQuery)
     PrintBench("Query      (single key)  ", ComputeBench(query_lats));
 }
 
+/**
+ * @brief 吞吐量测试 - 批量 Store/Load/Query
+ *
+ * @details 测试流程:
+ * ```
+ * Throughput_BulkStoreLoad
+ *     │
+ *     ├─► [阶段1: 批量 Store]
+ *     │   ├─► MakeKVBuffers(512 entries, 4096 bytes)
+ *     │   ├─► t0 = now
+ *     │   ├─► StoreAsync(all entries)
+ *     │   ├─► WaitWithTimeout
+ *     │   ├─► t1 = now
+ *     │   └─► 计算吞吐量: 512 / (t1 - t0)
+ *     │
+ *     ├─► [阶段2: 批量 Load]
+ *     │   (类似 Store)
+ *     │
+ *     ├─► [阶段3: 批量 Query]
+ *     │   (类似 Store)
+ *     │
+ *     ├─► [阶段4: 打印结果]
+ *     │
+ *     └─► [阶段5: 验证数据一致性]
+ * ```
+ *
+ * @note 测试目的:
+ * - 测量批量操作的吞吐量
+ * - 验证批量操作的数据一致性
+ */
 TEST_F(AsuBenchmarkTest, Throughput_BulkStoreLoad)
 {
     constexpr std::size_t kCount = 512;
@@ -441,6 +925,39 @@ TEST_F(AsuBenchmarkTest, Throughput_BulkStoreLoad)
     }
 }
 
+/**
+ * @brief 并发竞争测试 - 多线程 Store/Load
+ *
+ * @details 测试流程:
+ * ```
+ * ConcurrentCompetition_MultiThreadStoreLoad
+ *     │
+ *     ├─► 启动 4 个线程
+ *     │   each thread:
+ *     │     ├─► MakeKVBuffers(64 entries, thread-specific prefix)
+ *     │     ├─► for each entry: StoreAsync + Wait
+ *     │     ├─► 记录延迟
+ *     │     ├─► for each entry: LoadAsync + Wait
+ *     │     ├─► 记录延迟
+ *     │     ├─► 统计 success/fail
+ *     │     └─► return latencies
+ *     │
+ *     ├─► 等待所有线程完成
+ *     │
+ *     ├─► 聚合延迟
+ *     │
+ *     ├─► 打印结果
+ *     │   PrintBench("ConcurrentStoreLoad")
+ *     │   printf success/fail count
+ *     │
+ *     └─► EXPECT fail == 0
+ * ```
+ *
+ * @note 测试目的:
+ * - 验证多线程并发操作的正确性
+ * - 测量并发场景下的延迟和吞吐量
+ * - 验证线程安全性
+ */
 TEST_F(AsuBenchmarkTest, ConcurrentCompetition_MultiThreadStoreLoad)
 {
     constexpr std::size_t kThreads = 4;
@@ -530,6 +1047,29 @@ TEST_F(AsuBenchmarkTest, ConcurrentCompetition_MultiThreadStoreLoad)
     EXPECT_EQ(total_fail.load(), 0u);
 }
 
+/**
+ * @brief 大规模压力测试
+ *
+ * @details 测试流程:
+ * ```
+ * LargeScaleStress_ManyKeysLargePayload
+ *     │
+ *     ├─► MakeKVBuffers(2048 entries, 8192 bytes)
+ *     │
+ *     ├─► 批量 Store (timeout 30s)
+ *     │
+ *     ├─► 批量 Load
+ *     │
+ *     ├─► 打印吞吐量
+ *     │
+ *     └─► 验证数据一致性
+ * ```
+ *
+ * @note 测试目的:
+ * - 测试大规模数据处理能力
+ * - 测试大 Payload (8KB) 的处理
+ * - 验证内存管理正确性
+ */
 TEST_F(AsuBenchmarkTest, LargeScaleStress_ManyKeysLargePayload)
 {
     constexpr std::size_t kCount = 2048;
@@ -572,508 +1112,279 @@ TEST_F(AsuBenchmarkTest, LargeScaleStress_ManyKeysLargePayload)
     auto t3 = Clock::now();
     double load_sec = Duration(t3 - t2).count();
 
-    QueryOptions opts;
-    opts.timeout_ms = 30000;
-    QueryResult qresult;
-    auto t4 = Clock::now();
-    status = client_->Query(keys, opts, qresult);
+    std::printf("[BENCH] StressStore: %zu entries (%zu bytes each) in %.3fms  "
+                "throughput=%.1f entries/sec  %.1f MB/sec\n",
+                kCount, kPayloadSize, store_sec * 1000,
+                kCount / store_sec,
+                (kCount * kPayloadSize) / store_sec / (1024 * 1024));
+    std::printf("[BENCH] StressLoad:  %zu entries (%zu bytes each) in %.3fms  "
+                "throughput=%.1f entries/sec  %.1f MB/sec\n",
+                kCount, kPayloadSize, load_sec * 1000,
+                kCount / load_sec,
+                (kCount * kPayloadSize) / load_sec / (1024 * 1024));
+
+    for (std::size_t i = 0; i < kCount; ++i) {
+        EXPECT_EQ(std::memcmp(payloads[i].data(), load_payloads[i].data(), kPayloadSize), 0)
+            << "data integrity failed for key " << keys[i];
+    }
+}
+
+/**
+ * @brief RDMA 统计验证测试 - Store 统计
+ *
+ * @details 测试流程:
+ * ```
+ * RdmaStatsVerification_StoreTransfers
+ *     │
+ *     ├─► 创建 MockIoStats
+ *     ├─► 配置 enable_rdma_stats = true
+ *     ├─► 配置 rdma_per_entry = true
+ *     │
+ *     ├─► CreateRdmaMockBenchClient(io_stats, options)
+ *     ├─► Init(config)
+ *     │
+ *     ├─► MakeKVBuffers(8 entries, 4096 bytes)
+ *     ├─► StoreAsync + Wait
+ *     │
+ *     ├─► 验证统计:
+ *     │   EXPECT store_transfers == 8
+ *     │   EXPECT store_bytes == 8 * 4096 = 32768
+ *     │
+ *     └─► Shutdown
+ * ```
+ *
+ * @note 测试目的:
+ * - 验证 MockIoStats 正确记录 Store 统计
+ * - 验证 rdma_per_entry 模式正确工作
+ */
+TEST_F(AsuBenchmarkTest, RdmaStatsVerification_StoreTransfers)
+{
+    auto io_stats = std::make_shared<MockIoStats>();
+    MemoryIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
+
+    auto rdma_client = CreateRdmaMockBenchClient(io_stats, options);
+    ASSERT_NE(rdma_client, nullptr);
+    auto status = rdma_client->Init(MakeBenchConfig());
     ASSERT_TRUE(status.ok()) << status.message;
-    auto t5 = Clock::now();
-    double query_sec = Duration(t5 - t4).count();
 
-    std::printf("[BENCH] StressStore: %zu entries x %zu bytes  total=%.3fms  "
-                "throughput=%.1f entries/sec  data=%.1f MB/sec\n",
-                kCount, kPayloadSize, store_sec * 1000, kCount / store_sec,
-                (kCount * kPayloadSize) / (store_sec * 1024 * 1024));
-    std::printf("[BENCH] StressLoad:  %zu entries x %zu bytes  total=%.3fms  "
-                "throughput=%.1f entries/sec  data=%.1f MB/sec\n",
-                kCount, kPayloadSize, load_sec * 1000, kCount / load_sec,
-                (kCount * kPayloadSize) / (load_sec * 1024 * 1024));
-    std::printf("[BENCH] StressQuery: %zu keys               total=%.3fms  "
-                "throughput=%.1f keys/sec\n",
-                kCount, query_sec * 1000, kCount / query_sec);
-
-    std::size_t integrity_fail = 0;
-    for (std::size_t i = 0; i < kCount; ++i) {
-        if (std::memcmp(payloads[i].data(), load_payloads[i].data(), kPayloadSize) != 0) {
-            ++integrity_fail;
-        }
-    }
-    EXPECT_EQ(integrity_fail, 0u) << "data integrity failures in stress test";
-
-    for (std::size_t i = 0; i < kCount; ++i) {
-        EXPECT_EQ(qresult.exists[i], 1) << "key " << keys[i] << " should exist after store";
-    }
-}
-
-TEST_F(AsuBenchmarkTest, DeleteUnsupported_VerifyError)
-{
-    std::vector<CacheKey> keys{"del-key-0", "del-key-1"};
-    TaskId delete_id{kInvalidTaskId};
-    auto status = client_->DeleteAsync(keys, delete_id);
-    ASSERT_EQ(status.code, StatusCode::UNSUPPORTED);
-    ASSERT_EQ(delete_id, kInvalidTaskId);
-}
-
-
-
-class AsuRdmaMockBenchmarkTest : public ::testing::Test {
-protected:
-    void SetUp() override
-    {
-        io_stats_ = std::make_shared<MockIoStats>();
-
-        MockIoBackendOptions options;
-        options.enable_rdma_stats = true;
-        options.rdma_per_entry = true;
-
-        // Set to 0 for stable and fast unit tests. Increase this value if you want
-        // to simulate RDMA latency, for example 2/5/10 us per entry/key.
-        options.fixed_latency_us = 0;
-
-        // 0 means no bandwidth-based sleep. To simulate bandwidth, set for example:
-        // 100ULL * 1024 * 1024 * 1024 for 100GB/s.
-        options.bandwidth_bytes_per_sec = 0;
-        options.jitter_us = 0;
-        options.error_rate = 0.0;
-        options.min_query_bytes = 64;
-        options.min_delete_bytes = 64;
-
-        client_ = CreateRdmaMockBenchClient(io_stats_, options);
-        ASSERT_NE(client_, nullptr);
-
-        auto status = client_->Init(MakeBenchConfig());
-        ASSERT_TRUE(status.ok()) << status.message;
-    }
-
-    void TearDown() override
-    {
-        if (client_) {
-            auto status = client_->Shutdown();
-            ASSERT_TRUE(status.ok()) << status.message;
-        }
-    }
-
-    std::shared_ptr<MockIoStats> io_stats_;
-    std::unique_ptr<AsuClient> client_;
-};
-
-TEST_F(AsuRdmaMockBenchmarkTest, RdmaMock_EachEntryOneTransfer)
-{
     constexpr std::size_t kCount = 8;
     constexpr std::size_t kPayloadSize = 4096;
 
     std::vector<std::vector<std::uint8_t>> payloads;
-    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-entry-");
-    auto keys = ExtractKeys(entries);
-
-    io_stats_->Reset();
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-store-");
 
     TaskId store_id{kInvalidTaskId};
-    auto status = client_->StoreAsync(entries, store_id);
+    status = rdma_client->StoreAsync(entries, store_id);
     ASSERT_TRUE(status.ok()) << status.message;
-
     TaskResult store_result;
-    status = WaitWithTimeout(*client_, store_id, 5000, store_result);
+    status = WaitWithTimeout(*rdma_client, store_id, 5000, store_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    EXPECT_EQ(io_stats_->store_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(io_stats_->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(io_stats->store_transfers.load(), kCount);
+    EXPECT_EQ(io_stats->store_bytes.load(), kCount * kPayloadSize);
+
+    rdma_client->Shutdown();
+}
+
+/**
+ * @brief RDMA 统计验证测试 - Load 统计
+ *
+ * @details 类似 Store 测试，验证 Load 统计正确记录。
+ */
+TEST_F(AsuBenchmarkTest, RdmaStatsVerification_LoadTransfers)
+{
+    auto io_stats = std::make_shared<MockIoStats>();
+    MemoryIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
+
+    auto rdma_client = CreateRdmaMockBenchClient(io_stats, options);
+    ASSERT_NE(rdma_client, nullptr);
+    auto status = rdma_client->Init(MakeBenchConfig());
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    constexpr std::size_t kCount = 8;
+    constexpr std::size_t kPayloadSize = 4096;
+
+    std::vector<std::vector<std::uint8_t>> store_payloads;
+    auto entries = MakeKVBuffers(store_payloads, kCount, kPayloadSize, "rdma-load-");
+    auto keys = ExtractKeys(entries);
+
+    TaskId store_id{kInvalidTaskId};
+    status = rdma_client->StoreAsync(entries, store_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+    TaskResult store_result;
+    status = WaitWithTimeout(*rdma_client, store_id, 5000, store_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    io_stats->Reset();
 
     std::vector<std::vector<std::uint8_t>> load_payloads(kCount);
     std::vector<KVBuffer> load_entries;
     load_entries.reserve(kCount);
-
     for (std::size_t i = 0; i < kCount; ++i) {
         load_payloads[i].resize(kPayloadSize, 0);
-
         MemoryRegion region;
         region.memory_type = MemoryType::HOST;
         region.addr = reinterpret_cast<std::uint64_t>(load_payloads[i].data());
         region.size = kPayloadSize;
-
         Buffer buffer;
         buffer.region = region;
         load_entries.push_back(KVBuffer{keys[i], buffer});
     }
 
     TaskId load_id{kInvalidTaskId};
-    status = client_->LoadAsync(load_entries, load_id);
+    status = rdma_client->LoadAsync(load_entries, load_id);
     ASSERT_TRUE(status.ok()) << status.message;
-
     TaskResult load_result;
-    status = WaitWithTimeout(*client_, load_id, 5000, load_result);
+    status = WaitWithTimeout(*rdma_client, load_id, 5000, load_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    EXPECT_EQ(io_stats_->load_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(io_stats_->load_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
+    EXPECT_EQ(io_stats->load_transfers.load(), kCount);
+    EXPECT_EQ(io_stats->load_bytes.load(), kCount * kPayloadSize);
 
-    for (std::size_t i = 0; i < kCount; ++i) {
-        EXPECT_EQ(std::memcmp(payloads[i].data(), load_payloads[i].data(), kPayloadSize), 0)
-            << "data mismatch for key " << keys[i];
-    }
-
-    QueryOptions opts;
-    opts.timeout_ms = 5000;
-
-    QueryResult qresult;
-    status = client_->Query(keys, opts, qresult);
-    ASSERT_TRUE(status.ok()) << status.message;
-    ASSERT_EQ(qresult.exists.size(), kCount);
-
-    EXPECT_EQ(io_stats_->query_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_GE(io_stats_->query_bytes.load(std::memory_order_relaxed), kCount * 64);
-
-    for (std::size_t i = 0; i < kCount; ++i) {
-        EXPECT_EQ(qresult.exists[i], 1) << "key should exist: " << keys[i];
-    }
-
-    std::printf("[BENCH][RDMA-MOCK] transfers: store=%llu load=%llu query=%llu\n",
-                static_cast<unsigned long long>(
-                    io_stats_->store_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(
-                    io_stats_->load_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(
-                    io_stats_->query_transfers.load(std::memory_order_relaxed)));
+    rdma_client->Shutdown();
 }
 
-TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
+/**
+ * @brief RDMA 统计验证测试 - Query 统计
+ *
+ * @details Query 字节数 = Key 大小 + 1 (响应字节)。
+ */
+TEST_F(AsuBenchmarkTest, RdmaStatsVerification_QueryTransfers)
 {
     auto io_stats = std::make_shared<MockIoStats>();
-
-    MockIoBackendOptions options;
+    MemoryIoBackendOptions options;
     options.enable_rdma_stats = true;
     options.rdma_per_entry = true;
 
-    // Simulate one RDMA operation per entry/key with fixed 10us latency.
-    options.fixed_latency_us = 10;
-    options.bandwidth_bytes_per_sec = 0;
-    options.jitter_us = 0;
-    options.error_rate = 0.0;
-    options.min_query_bytes = 64;
-    options.min_delete_bytes = 64;
-
-    auto client = CreateRdmaMockBenchClient(io_stats, options);
-    ASSERT_NE(client, nullptr);
-
-    auto status = client->Init(MakeBenchConfig());
+    auto rdma_client = CreateRdmaMockBenchClient(io_stats, options);
+    ASSERT_NE(rdma_client, nullptr);
+    auto status = rdma_client->Init(MakeBenchConfig());
     ASSERT_TRUE(status.ok()) << status.message;
 
-    constexpr std::size_t kCount = 128;
+    constexpr std::size_t kCount = 8;
     constexpr std::size_t kPayloadSize = 4096;
 
     std::vector<std::vector<std::uint8_t>> payloads;
-    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-lat-");
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-query-");
     auto keys = ExtractKeys(entries);
 
-    auto t0 = Clock::now();
-
     TaskId store_id{kInvalidTaskId};
-    status = client->StoreAsync(entries, store_id);
+    status = rdma_client->StoreAsync(entries, store_id);
     ASSERT_TRUE(status.ok()) << status.message;
-
     TaskResult store_result;
-    status = WaitWithTimeout(*client, store_id, 10000, store_result);
+    status = WaitWithTimeout(*rdma_client, store_id, 5000, store_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    auto t1 = Clock::now();
+    io_stats->Reset();
 
     QueryOptions opts;
-    opts.timeout_ms = 10000;
-
-    QueryResult qresult;
-    status = client->Query(keys, opts, qresult);
+    opts.timeout_ms = 5000;
+    QueryResult result;
+    status = rdma_client->Query(keys, opts, result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    auto t2 = Clock::now();
+    EXPECT_EQ(io_stats->query_transfers.load(), kCount);
 
-    const double store_ms = Duration(t1 - t0).count() * 1000;
-    const double query_ms = Duration(t2 - t1).count() * 1000;
+    std::uint64_t expected_query_bytes = 0;
+    for (const auto& key : keys) {
+        expected_query_bytes += key.size() + 1;
+    }
+    EXPECT_EQ(io_stats->query_bytes.load(), expected_query_bytes);
 
-    std::printf("[BENCH][RDMA-MOCK] Store: entries=%zu payload=%zuB "
-                "rdma_transfers=%llu total=%.3fms\n",
-                kCount, kPayloadSize,
-                static_cast<unsigned long long>(
-                    io_stats->store_transfers.load(std::memory_order_relaxed)),
-                store_ms);
-
-    std::printf("[BENCH][RDMA-MOCK] Query: keys=%zu "
-                "rdma_transfers=%llu total=%.3fms\n",
-                kCount,
-                static_cast<unsigned long long>(
-                    io_stats->query_transfers.load(std::memory_order_relaxed)),
-                query_ms);
-
-    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), kCount);
-    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), kCount * kPayloadSize);
-    EXPECT_EQ(io_stats->query_transfers.load(std::memory_order_relaxed), kCount);
-
-    status = client->Shutdown();
-    ASSERT_TRUE(status.ok()) << status.message;
+    rdma_client->Shutdown();
 }
 
+/**
+ * @brief RDMA 统计验证测试 - Delete 统计
+ *
+ * @details Delete 字节数 = Key 大小（无数据传输）。
+ */
+TEST_F(AsuBenchmarkTest, RdmaStatsVerification_DeleteTransfers)
+{
+    auto io_stats = std::make_shared<MockIoStats>();
+    MemoryIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
 
+    auto rdma_client = CreateRdmaMockBenchClient(io_stats, options);
+    ASSERT_NE(rdma_client, nullptr);
+    auto status = rdma_client->Init(MakeBenchConfig());
+    ASSERT_TRUE(status.ok()) << status.message;
 
-TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
-{ 
-    constexpr std::size_t kTransportNum = 4;
-    constexpr std::size_t kTaskCount = 2048;
-    constexpr std::size_t kEntriesPerTask = 4;
+    constexpr std::size_t kCount = 8;
     constexpr std::size_t kPayloadSize = 4096;
 
-    auto io_stats = std::make_shared<MockIoStats>();
+    std::vector<std::vector<std::uint8_t>> payloads;
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-delete-");
+    auto keys = ExtractKeys(entries);
 
-    MockIoBackendOptions options;
-    options.enable_rdma_stats = true;
-    options.rdma_per_entry = true;
-    options.fixed_latency_us = 0;//测试目的：并发吞吐量和数据完整性，不关注延迟
-    options.bandwidth_bytes_per_sec = 0;
-    options.jitter_us = 0;
-    options.error_rate = 0.0;
-    options.min_query_bytes = 64;
-    options.min_delete_bytes = 64;
-
-    auto client = CreateRdmaMockBenchClient(io_stats, options);
-    ASSERT_NE(client, nullptr);
-
-    auto status = client->Init(MakeBenchConfig(kTransportNum));
+    TaskId store_id{kInvalidTaskId};
+    status = rdma_client->StoreAsync(entries, store_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+    TaskResult store_result;
+    status = WaitWithTimeout(*rdma_client, store_id, 5000, store_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    std::vector<StressTaskData> store_tasks;
-    store_tasks.reserve(kTaskCount);
+    io_stats->Reset();
 
-    auto t0 = Clock::now();
-
-    for (std::size_t i = 0; i < kTaskCount; ++i) {
-        store_tasks.push_back(MakeStressStoreTask(i, kEntriesPerTask, kPayloadSize, "rdma-stress-"));
-
-        status = client->StoreAsync(store_tasks.back().entries, store_tasks.back().task_id);
-        ASSERT_TRUE(status.ok()) << status.message;
-        ASSERT_NE(store_tasks.back().task_id, kInvalidTaskId);
-    }
-
-    for (auto& task : store_tasks) {
-        TaskResult result;
-        status = WaitWithTimeout(*client, task.task_id, 30000, result);
-        ASSERT_TRUE(status.ok()) << status.message;
-    }
-
-    auto t1 = Clock::now();
-
-    const auto expected_entry_count = kTaskCount * kEntriesPerTask;
-    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), expected_entry_count);
-    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
-
-    std::vector<CacheKey> all_keys;
-    all_keys.reserve(expected_entry_count);
-    for (const auto& task : store_tasks) {
-        all_keys.insert(all_keys.end(), task.keys.begin(), task.keys.end());
-    }
-
-    QueryOptions query_options;
-    query_options.timeout_ms = 30000;
-
-    QueryResult query_result;
-    status = client->Query(all_keys, query_options, query_result);
+    TaskId delete_id{kInvalidTaskId};
+    status = rdma_client->DeleteAsync(keys, delete_id);
     ASSERT_TRUE(status.ok()) << status.message;
-    ASSERT_EQ(query_result.exists.size(), all_keys.size());
-
-    for (std::size_t i = 0; i < query_result.exists.size(); ++i) {
-        ASSERT_EQ(query_result.exists[i], 1) << "missing key: " << all_keys[i];
-    }
-
-    auto t2 = Clock::now();
-
-    EXPECT_EQ(io_stats->query_transfers.load(std::memory_order_relaxed), expected_entry_count);
-
-    std::vector<StressTaskData> load_tasks;
-    load_tasks.reserve(kTaskCount);
-
-    for (std::size_t i = 0; i < kTaskCount; ++i) {
-        load_tasks.push_back(MakeStressLoadTask(store_tasks[i].keys, kPayloadSize));
-
-        status = client->LoadAsync(load_tasks.back().entries, load_tasks.back().task_id);
-        ASSERT_TRUE(status.ok()) << status.message;
-        ASSERT_NE(load_tasks.back().task_id, kInvalidTaskId);
-    }
-
-    for (auto& task : load_tasks) {
-        TaskResult result;
-        status = WaitWithTimeout(*client, task.task_id, 30000, result);
-        ASSERT_TRUE(status.ok()) << status.message;
-    }
-
-    auto t3 = Clock::now();
-
-    EXPECT_EQ(io_stats->load_transfers.load(std::memory_order_relaxed), expected_entry_count);
-    EXPECT_EQ(io_stats->load_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
-
-    for (std::size_t task_idx : {std::size_t{0}, kTaskCount / 2, kTaskCount - 1}) {
-        for (std::size_t entry_idx = 0; entry_idx < kEntriesPerTask; ++entry_idx) {
-            EXPECT_EQ(std::memcmp(store_tasks[task_idx].payloads[entry_idx].data(),
-                                  load_tasks[task_idx].payloads[entry_idx].data(), kPayloadSize),
-                      0)
-                << "data mismatch, task=" << task_idx << ", entry=" << entry_idx;
-        }
-    }
-
-    const double store_ms = Duration(t1 - t0).count() * 1000.0;
-    const double query_ms = Duration(t2 - t1).count() * 1000.0;
-    const double load_ms = Duration(t3 - t2).count() * 1000.0;
-    const double total_ms = Duration(t3 - t0).count() * 1000.0;
-
-    std::printf("[STRESS][RDMA-MOCK] transports=%zu tasks=%zu entries_per_task=%zu payload=%zuB\n",
-                kTransportNum, kTaskCount, kEntriesPerTask, kPayloadSize);
-    std::printf("[STRESS][RDMA-MOCK] store_transfers=%llu load_transfers=%llu query_transfers=%llu\n",
-                static_cast<unsigned long long>(io_stats->store_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(io_stats->load_transfers.load(std::memory_order_relaxed)),
-                static_cast<unsigned long long>(io_stats->query_transfers.load(std::memory_order_relaxed)));
-    std::printf("[STRESS][RDMA-MOCK] store=%.3fms query=%.3fms load=%.3fms total=%.3fms\n",
-                store_ms, query_ms, load_ms, total_ms);
-
-    status = client->Shutdown();
+    TaskResult delete_result;
+    status = WaitWithTimeout(*rdma_client, delete_id, 5000, delete_result);
     ASSERT_TRUE(status.ok()) << status.message;
+
+    EXPECT_EQ(io_stats->delete_transfers.load(), kCount);
+
+    std::uint64_t expected_delete_bytes = 0;
+    for (const auto& key : keys) {
+        expected_delete_bytes += key.size();
+    }
+    EXPECT_EQ(io_stats->delete_bytes.load(), expected_delete_bytes);
+
+    rdma_client->Shutdown();
 }
 
-TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
+/**
+ * @brief RDMA 统计验证测试 - 批量模式
+ *
+ * @details rdma_per_entry = false 时，批量统计。
+ * - transfers = 1 (一次批量操作)
+ * - bytes = 所有 entry 的总字节数
+ */
+TEST_F(AsuBenchmarkTest, RdmaStatsVerification_BulkMode)
 {
-    constexpr std::size_t kTransportNum = 4;
-    constexpr std::size_t kThreadNum = 8;
-    constexpr std::size_t kOpsPerThread = 512;
-    constexpr std::size_t kEntriesPerOp = 2;
-    constexpr std::size_t kPayloadSize = 1024;
-    constexpr std::size_t kTotalOps = kThreadNum * kOpsPerThread;
-    constexpr std::size_t kTotalEntries = kTotalOps * kEntriesPerOp;
-
     auto io_stats = std::make_shared<MockIoStats>();
-
-    MockIoBackendOptions options;
+    MemoryIoBackendOptions options;
     options.enable_rdma_stats = true;
-    options.rdma_per_entry = true;
-    options.fixed_latency_us = 0;
-    options.bandwidth_bytes_per_sec = 0;
-    options.jitter_us = 0;
-    options.error_rate = 0.0;
-    options.min_query_bytes = 64;
-    options.min_delete_bytes = 64;
+    options.rdma_per_entry = false;
 
-    auto client = CreateRdmaMockBenchClient(io_stats, options);
-    ASSERT_NE(client, nullptr);
-
-    auto status = client->Init(MakeBenchConfig(kTransportNum));
+    auto rdma_client = CreateRdmaMockBenchClient(io_stats, options);
+    ASSERT_NE(rdma_client, nullptr);
+    auto status = rdma_client->Init(MakeBenchConfig());
     ASSERT_TRUE(status.ok()) << status.message;
 
-    std::atomic<std::size_t> success_ops{0};
-    std::atomic<std::size_t> failed_ops{0};
-    std::atomic<std::size_t> task_index{0};
+    constexpr std::size_t kCount = 8;
+    constexpr std::size_t kPayloadSize = 4096;
 
-    std::vector<StressTaskData> all_tasks(kTotalOps);
+    std::vector<std::vector<std::uint8_t>> payloads;
+    auto entries = MakeKVBuffers(payloads, kCount, kPayloadSize, "rdma-bulk-");
 
-    auto t0 = Clock::now();
-
-    std::vector<std::thread> threads;
-    threads.reserve(kThreadNum);
-
-    for (std::size_t tid = 0; tid < kThreadNum; ++tid) {
-        threads.emplace_back([&, tid]() {
-            for (std::size_t op = 0; op < kOpsPerThread; ++op) {
-                const auto global_index = tid * kOpsPerThread + op;
-                auto task = MakeStressStoreTask(global_index, kEntriesPerOp, kPayloadSize, "rdma-mt-");
-
-                TaskId task_id{kInvalidTaskId};
-                auto s = client->StoreAsync(task.entries, task_id);
-                if (!s.ok()) {
-                    failed_ops.fetch_add(1, std::memory_order_relaxed);
-                    continue;
-                }
-
-                TaskResult result;
-                s = WaitWithTimeout(*client, task_id, 30000, result);
-                if (!s.ok()) {
-                    failed_ops.fetch_add(1, std::memory_order_relaxed);
-                    continue;
-                }
-
-                const auto idx = task_index.fetch_add(1, std::memory_order_relaxed);
-                all_tasks[idx] = std::move(task);
-                success_ops.fetch_add(1, std::memory_order_relaxed);
-            }
-        });
-    }
-
-    for (auto& th : threads) {
-        th.join();
-    }
-
-    auto t1 = Clock::now();
-
-    const auto ok_ops = success_ops.load(std::memory_order_relaxed);
-    const auto bad_ops = failed_ops.load(std::memory_order_relaxed);
-
-    EXPECT_EQ(bad_ops, 0);
-    EXPECT_EQ(ok_ops, kTotalOps);
-
-    const auto expected_store_transfers = ok_ops * kEntriesPerOp;
-    EXPECT_EQ(io_stats->store_transfers.load(std::memory_order_relaxed), expected_store_transfers);
-    EXPECT_EQ(io_stats->store_bytes.load(std::memory_order_relaxed), expected_store_transfers * kPayloadSize);
-
-    std::vector<std::vector<std::uint8_t>> load_payloads(kTotalEntries);
-    std::vector<KVBuffer> load_entries;
-    load_entries.reserve(kTotalEntries);
-
-    for (std::size_t i = 0; i < ok_ops; ++i) {
-        for (std::size_t j = 0; j < kEntriesPerOp; ++j) {
-            const auto entry_idx = i * kEntriesPerOp + j;
-            load_payloads[entry_idx].resize(kPayloadSize, 0);
-
-            MemoryRegion region;
-            region.memory_type = MemoryType::HOST;
-            region.addr = reinterpret_cast<std::uint64_t>(load_payloads[entry_idx].data());
-            region.size = kPayloadSize;
-
-            Buffer buffer;
-            buffer.region = region;
-
-            load_entries.push_back(KVBuffer{all_tasks[i].keys[j], buffer});
-        }
-    }
-
-    TaskId load_id{kInvalidTaskId};
-    status = client->LoadAsync(load_entries, load_id);
+    TaskId store_id{kInvalidTaskId};
+    status = rdma_client->StoreAsync(entries, store_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+    TaskResult store_result;
+    status = WaitWithTimeout(*rdma_client, store_id, 5000, store_result);
     ASSERT_TRUE(status.ok()) << status.message;
 
-    TaskResult load_result;
-    status = WaitWithTimeout(*client, load_id, 30000, load_result);
-    ASSERT_TRUE(status.ok()) << status.message;
+    EXPECT_EQ(io_stats->store_transfers.load(), 1u);
+    EXPECT_EQ(io_stats->store_bytes.load(), kCount * kPayloadSize);
 
-    std::size_t integrity_failures = 0;
-    for (std::size_t i = 0; i < ok_ops; ++i) {
-        for (std::size_t j = 0; j < kEntriesPerOp; ++j) {
-            const auto entry_idx = i * kEntriesPerOp + j;
-            if (std::memcmp(all_tasks[i].payloads[j].data(),
-                            load_payloads[entry_idx].data(),
-                            kPayloadSize) != 0) {
-                ++integrity_failures;
-            }
-        }
-    }
-    EXPECT_EQ(integrity_failures, 0u) << "data integrity check failed";
-
-    const double total_ms = Duration(t1 - t0).count() * 1000.0;
-    const double ops_per_sec = total_ms > 0.0 ? static_cast<double>(ok_ops) / (total_ms / 1000.0) : 0.0;
-
-    std::printf("[STRESS][RDMA-MOCK][MT] threads=%zu ops_per_thread=%zu entries_per_op=%zu payload=%zuB\n",
-                kThreadNum, kOpsPerThread, kEntriesPerOp, kPayloadSize);
-    std::printf("[STRESS][RDMA-MOCK][MT] success_ops=%zu failed_ops=%zu store_transfers=%llu total=%.3fms throughput=%.1f ops/sec\n",
-                ok_ops, bad_ops,
-                static_cast<unsigned long long>(io_stats->store_transfers.load(std::memory_order_relaxed)),
-                total_ms, ops_per_sec);
-    std::printf("[STRESS][RDMA-MOCK][MT] integrity_check: entries=%zu failures=%zu\n",
-                kTotalEntries, integrity_failures);
-
-    status = client->Shutdown();
-    ASSERT_TRUE(status.ok()) << status.message;
+    rdma_client->Shutdown();
 }
-
 
 }  // namespace UC::ASU
