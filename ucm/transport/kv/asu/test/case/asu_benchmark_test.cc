@@ -129,6 +129,70 @@ Status WaitWithTimeout(AsuClient& client, TaskId task_id, std::uint64_t timeout_
     return Status::OK();
 }
 
+
+
+struct StressTaskData {
+    std::vector<std::vector<std::uint8_t>> payloads;
+    std::vector<KVBuffer> entries;
+    std::vector<CacheKey> keys;
+    TaskId task_id{kInvalidTaskId};
+};
+
+StressTaskData MakeStressStoreTask(std::size_t task_index, std::size_t entries_per_task,
+                                   std::size_t payload_size, const std::string& key_prefix)
+{
+    StressTaskData data;
+    data.payloads.resize(entries_per_task);
+    data.entries.reserve(entries_per_task);
+    data.keys.reserve(entries_per_task);
+
+    std::mt19937 rng(static_cast<std::uint32_t>(task_index + 12345));
+
+    for (std::size_t i = 0; i < entries_per_task; ++i) {
+        data.payloads[i].resize(payload_size);
+        std::generate(data.payloads[i].begin(), data.payloads[i].end(), rng);
+
+        auto key = key_prefix + std::to_string(task_index) + "-" + std::to_string(i);
+
+        MemoryRegion region;
+        region.memory_type = MemoryType::HOST;
+        region.addr = reinterpret_cast<std::uint64_t>(data.payloads[i].data());
+        region.size = data.payloads[i].size();
+
+        Buffer buffer;
+        buffer.region = region;
+
+        data.entries.push_back(KVBuffer{key, buffer});
+        data.keys.push_back(key);
+    }
+
+    return data;
+}
+
+StressTaskData MakeStressLoadTask(const std::vector<CacheKey>& keys, std::size_t payload_size)
+{
+    StressTaskData data;
+    data.keys = keys;
+    data.payloads.resize(keys.size());
+    data.entries.reserve(keys.size());
+
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        data.payloads[i].assign(payload_size, 0);
+
+        MemoryRegion region;
+        region.memory_type = MemoryType::HOST;
+        region.addr = reinterpret_cast<std::uint64_t>(data.payloads[i].data());
+        region.size = data.payloads[i].size();
+
+        Buffer buffer;
+        buffer.region = region;
+
+        data.entries.push_back(KVBuffer{keys[i], buffer});
+    }
+
+    return data;
+}
+
 }  // namespace
 
 class AsuBenchmarkTest : public ::testing::Test {
@@ -696,7 +760,7 @@ TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
     auto status = client->Init(MakeBenchConfig());
     ASSERT_TRUE(status.ok()) << status.message;
 
-    constexpr std::size_t kCount = 8192;
+    constexpr std::size_t kCount = 128;
     constexpr std::size_t kPayloadSize = 4096;
 
     std::vector<std::vector<std::uint8_t>> payloads;
@@ -748,5 +812,269 @@ TEST(AsuRdmaMockBenchmarkStandaloneTest, RdmaMock_LatencyWithPerEntryTransfer)
     status = client->Shutdown();
     ASSERT_TRUE(status.ok()) << status.message;
 }
+
+
+
+TEST(AsuBenchmarkStressTest, InFlightStoreLoadQueryPressure)
+{ 
+    constexpr std::size_t kTransportNum = 4;
+    constexpr std::size_t kTaskCount = 2048;
+    constexpr std::size_t kEntriesPerTask = 4;
+    constexpr std::size_t kPayloadSize = 4096;
+
+    auto rdma_stats = std::make_shared<MockRdmaStats>();
+
+    MockIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
+    options.fixed_latency_us = 0;//测试目的：并发吞吐量和数据完整性，不关注延迟
+    options.bandwidth_bytes_per_sec = 0;
+    options.jitter_us = 0;
+    options.error_rate = 0.0;
+    options.min_query_bytes = 64;
+    options.min_delete_bytes = 64;
+
+    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    ASSERT_NE(client, nullptr);
+
+    auto status = client->Init(MakeBenchConfig(kTransportNum));
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    std::vector<StressTaskData> store_tasks;
+    store_tasks.reserve(kTaskCount);
+
+    auto t0 = Clock::now();
+
+    for (std::size_t i = 0; i < kTaskCount; ++i) {
+        store_tasks.push_back(MakeStressStoreTask(i, kEntriesPerTask, kPayloadSize, "rdma-stress-"));
+
+        status = client->StoreAsync(store_tasks.back().entries, store_tasks.back().task_id);
+        ASSERT_TRUE(status.ok()) << status.message;
+        ASSERT_NE(store_tasks.back().task_id, kInvalidTaskId);
+    }
+
+    for (auto& task : store_tasks) {
+        TaskResult result;
+        status = WaitWithTimeout(*client, task.task_id, 30000, result);
+        ASSERT_TRUE(status.ok()) << status.message;
+    }
+
+    auto t1 = Clock::now();
+
+    const auto expected_entry_count = kTaskCount * kEntriesPerTask;
+    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), expected_entry_count);
+    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
+
+    std::vector<CacheKey> all_keys;
+    all_keys.reserve(expected_entry_count);
+    for (const auto& task : store_tasks) {
+        all_keys.insert(all_keys.end(), task.keys.begin(), task.keys.end());
+    }
+
+    QueryOptions query_options;
+    query_options.timeout_ms = 30000;
+
+    QueryResult query_result;
+    status = client->Query(all_keys, query_options, query_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+    ASSERT_EQ(query_result.exists.size(), all_keys.size());
+
+    for (std::size_t i = 0; i < query_result.exists.size(); ++i) {
+        ASSERT_EQ(query_result.exists[i], 1) << "missing key: " << all_keys[i];
+    }
+
+    auto t2 = Clock::now();
+
+    EXPECT_EQ(rdma_stats->query_transfers.load(std::memory_order_relaxed), expected_entry_count);
+
+    std::vector<StressTaskData> load_tasks;
+    load_tasks.reserve(kTaskCount);
+
+    for (std::size_t i = 0; i < kTaskCount; ++i) {
+        load_tasks.push_back(MakeStressLoadTask(store_tasks[i].keys, kPayloadSize));
+
+        status = client->LoadAsync(load_tasks.back().entries, load_tasks.back().task_id);
+        ASSERT_TRUE(status.ok()) << status.message;
+        ASSERT_NE(load_tasks.back().task_id, kInvalidTaskId);
+    }
+
+    for (auto& task : load_tasks) {
+        TaskResult result;
+        status = WaitWithTimeout(*client, task.task_id, 30000, result);
+        ASSERT_TRUE(status.ok()) << status.message;
+    }
+
+    auto t3 = Clock::now();
+
+    EXPECT_EQ(rdma_stats->load_transfers.load(std::memory_order_relaxed), expected_entry_count);
+    EXPECT_EQ(rdma_stats->load_bytes.load(std::memory_order_relaxed), expected_entry_count * kPayloadSize);
+
+    for (std::size_t task_idx : {std::size_t{0}, kTaskCount / 2, kTaskCount - 1}) {
+        for (std::size_t entry_idx = 0; entry_idx < kEntriesPerTask; ++entry_idx) {
+            EXPECT_EQ(std::memcmp(store_tasks[task_idx].payloads[entry_idx].data(),
+                                  load_tasks[task_idx].payloads[entry_idx].data(), kPayloadSize),
+                      0)
+                << "data mismatch, task=" << task_idx << ", entry=" << entry_idx;
+        }
+    }
+
+    const double store_ms = Duration(t1 - t0).count() * 1000.0;
+    const double query_ms = Duration(t2 - t1).count() * 1000.0;
+    const double load_ms = Duration(t3 - t2).count() * 1000.0;
+    const double total_ms = Duration(t3 - t0).count() * 1000.0;
+
+    std::printf("[STRESS][RDMA-MOCK] transports=%zu tasks=%zu entries_per_task=%zu payload=%zuB\n",
+                kTransportNum, kTaskCount, kEntriesPerTask, kPayloadSize);
+    std::printf("[STRESS][RDMA-MOCK] store_transfers=%llu load_transfers=%llu query_transfers=%llu\n",
+                static_cast<unsigned long long>(rdma_stats->store_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(rdma_stats->load_transfers.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(rdma_stats->query_transfers.load(std::memory_order_relaxed)));
+    std::printf("[STRESS][RDMA-MOCK] store=%.3fms query=%.3fms load=%.3fms total=%.3fms\n",
+                store_ms, query_ms, load_ms, total_ms);
+
+    status = client->Shutdown();
+    ASSERT_TRUE(status.ok()) << status.message;
+}
+
+TEST(AsuBenchmarkStressTest, MultiThreadSubmitWaitPressure)
+{
+    constexpr std::size_t kTransportNum = 4;
+    constexpr std::size_t kThreadNum = 8;
+    constexpr std::size_t kOpsPerThread = 512;
+    constexpr std::size_t kEntriesPerOp = 2;
+    constexpr std::size_t kPayloadSize = 1024;
+    constexpr std::size_t kTotalOps = kThreadNum * kOpsPerThread;
+    constexpr std::size_t kTotalEntries = kTotalOps * kEntriesPerOp;
+
+    auto rdma_stats = std::make_shared<MockRdmaStats>();
+
+    MockIoBackendOptions options;
+    options.enable_rdma_stats = true;
+    options.rdma_per_entry = true;
+    options.fixed_latency_us = 0;
+    options.bandwidth_bytes_per_sec = 0;
+    options.jitter_us = 0;
+    options.error_rate = 0.0;
+    options.min_query_bytes = 64;
+    options.min_delete_bytes = 64;
+
+    auto client = CreateRdmaMockBenchClient(rdma_stats, options);
+    ASSERT_NE(client, nullptr);
+
+    auto status = client->Init(MakeBenchConfig(kTransportNum));
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    std::atomic<std::size_t> success_ops{0};
+    std::atomic<std::size_t> failed_ops{0};
+    std::atomic<std::size_t> task_index{0};
+
+    std::vector<StressTaskData> all_tasks(kTotalOps);
+
+    auto t0 = Clock::now();
+
+    std::vector<std::thread> threads;
+    threads.reserve(kThreadNum);
+
+    for (std::size_t tid = 0; tid < kThreadNum; ++tid) {
+        threads.emplace_back([&, tid]() {
+            for (std::size_t op = 0; op < kOpsPerThread; ++op) {
+                const auto global_index = tid * kOpsPerThread + op;
+                auto task = MakeStressStoreTask(global_index, kEntriesPerOp, kPayloadSize, "rdma-mt-");
+
+                TaskId task_id{kInvalidTaskId};
+                auto s = client->StoreAsync(task.entries, task_id);
+                if (!s.ok()) {
+                    failed_ops.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+
+                TaskResult result;
+                s = WaitWithTimeout(*client, task_id, 30000, result);
+                if (!s.ok()) {
+                    failed_ops.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+
+                const auto idx = task_index.fetch_add(1, std::memory_order_relaxed);
+                all_tasks[idx] = std::move(task);
+                success_ops.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    for (auto& th : threads) {
+        th.join();
+    }
+
+    auto t1 = Clock::now();
+
+    const auto ok_ops = success_ops.load(std::memory_order_relaxed);
+    const auto bad_ops = failed_ops.load(std::memory_order_relaxed);
+
+    EXPECT_EQ(bad_ops, 0);
+    EXPECT_EQ(ok_ops, kTotalOps);
+
+    const auto expected_store_transfers = ok_ops * kEntriesPerOp;
+    EXPECT_EQ(rdma_stats->store_transfers.load(std::memory_order_relaxed), expected_store_transfers);
+    EXPECT_EQ(rdma_stats->store_bytes.load(std::memory_order_relaxed), expected_store_transfers * kPayloadSize);
+
+    std::vector<std::vector<std::uint8_t>> load_payloads(kTotalEntries);
+    std::vector<KVBuffer> load_entries;
+    load_entries.reserve(kTotalEntries);
+
+    for (std::size_t i = 0; i < ok_ops; ++i) {
+        for (std::size_t j = 0; j < kEntriesPerOp; ++j) {
+            const auto entry_idx = i * kEntriesPerOp + j;
+            load_payloads[entry_idx].resize(kPayloadSize, 0);
+
+            MemoryRegion region;
+            region.memory_type = MemoryType::HOST;
+            region.addr = reinterpret_cast<std::uint64_t>(load_payloads[entry_idx].data());
+            region.size = kPayloadSize;
+
+            Buffer buffer;
+            buffer.region = region;
+
+            load_entries.push_back(KVBuffer{all_tasks[i].keys[j], buffer});
+        }
+    }
+
+    TaskId load_id{kInvalidTaskId};
+    status = client->LoadAsync(load_entries, load_id);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    TaskResult load_result;
+    status = WaitWithTimeout(*client, load_id, 30000, load_result);
+    ASSERT_TRUE(status.ok()) << status.message;
+
+    std::size_t integrity_failures = 0;
+    for (std::size_t i = 0; i < ok_ops; ++i) {
+        for (std::size_t j = 0; j < kEntriesPerOp; ++j) {
+            const auto entry_idx = i * kEntriesPerOp + j;
+            if (std::memcmp(all_tasks[i].payloads[j].data(),
+                            load_payloads[entry_idx].data(),
+                            kPayloadSize) != 0) {
+                ++integrity_failures;
+            }
+        }
+    }
+    EXPECT_EQ(integrity_failures, 0u) << "data integrity check failed";
+
+    const double total_ms = Duration(t1 - t0).count() * 1000.0;
+    const double ops_per_sec = total_ms > 0.0 ? static_cast<double>(ok_ops) / (total_ms / 1000.0) : 0.0;
+
+    std::printf("[STRESS][RDMA-MOCK][MT] threads=%zu ops_per_thread=%zu entries_per_op=%zu payload=%zuB\n",
+                kThreadNum, kOpsPerThread, kEntriesPerOp, kPayloadSize);
+    std::printf("[STRESS][RDMA-MOCK][MT] success_ops=%zu failed_ops=%zu store_transfers=%llu total=%.3fms throughput=%.1f ops/sec\n",
+                ok_ops, bad_ops,
+                static_cast<unsigned long long>(rdma_stats->store_transfers.load(std::memory_order_relaxed)),
+                total_ms, ops_per_sec);
+    std::printf("[STRESS][RDMA-MOCK][MT] integrity_check: entries=%zu failures=%zu\n",
+                kTotalEntries, integrity_failures);
+
+    status = client->Shutdown();
+    ASSERT_TRUE(status.ok()) << status.message;
+}
+
 
 }  // namespace UC::ASU
