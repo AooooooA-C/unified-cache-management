@@ -231,8 +231,11 @@ Status AsuClientImpl::Check(TaskId taskId, TaskResult& result)
 {
     auto ctx = taskManager_.Get(taskId);
     if (ctx != nullptr) {
-        PollTask(ctx);
-        auto status = BuildResult(ctx, result);
+        Status status;
+        {
+            std::lock_guard<std::mutex> lock(ctx->waitMu);
+            status = BuildResult(ctx, result);
+        }
         if (IsTaskComplete(result)) { (void)taskManager_.Remove(taskId); }
         if (viewServer_ != nullptr &&
             (viewServer_->ShouldRefreshView(status) || viewServer_->ShouldRefreshView(result))) {
@@ -248,7 +251,16 @@ Status AsuClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& r
 {
     auto ctx = taskManager_.Get(taskId);
     if (ctx != nullptr) {
-        auto status = WaitTaskContext(ctx, timeoutMs, result);
+        const auto waitMs = timeoutMs == 0 ? config_.defaultWaitTimeoutMs : timeoutMs;
+        std::unique_lock<std::mutex> lock(ctx->waitMu);
+        const bool done = ctx->cv.wait_for(lock, std::chrono::milliseconds(waitMs),
+                                           [ctx] { return ctx->Done(); });
+        auto status = BuildResult(ctx, result);
+        if (!done) {
+            result.status = Status::Error(StatusCode::TIMEOUT, "client task wait timeout");
+            status = result.status;
+        }
+        lock.unlock();
         if (IsTaskComplete(result)) { (void)taskManager_.Remove(taskId); }
         if (viewServer_ != nullptr &&
             (viewServer_->ShouldRefreshView(status) || viewServer_->ShouldRefreshView(result))) {
@@ -480,6 +492,13 @@ Status AsuClientImpl::DispatchTask(const ClientTaskContextPtr& ctx)
     if (!snapshot) {
         return Status::Error(StatusCode::NOT_INITIALIZED, "client view is not ready");
     }
+    if (ctx->subTasks.empty()) {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        ctx->finalStatus = Status::OK();
+        ctx->state.store(ClientTaskState::COMPLETED, std::memory_order_release);
+        ctx->cv.notify_all();
+        return Status::OK();
+    }
 
     for (auto& subTask : ctx->subTasks) {
         auto transIter = snapshot->transports.find(subTask.asuId);
@@ -508,7 +527,7 @@ Status AsuClientImpl::DispatchTask(const ClientTaskContextPtr& ctx)
             }
             return WithContext(status, "asuId=" + std::to_string(subTask.asuId));
         }
-        (void)transIter->second->SetCompletionCallback(
+        status = transIter->second->SetCompletionCallback(
             subTask.transTaskId,
             [this, weakCtx = std::weak_ptr<ClientTaskContext>(ctx), asuId = subTask.asuId,
              transTaskId = subTask.transTaskId](TaskId completedTaskId) {
@@ -516,71 +535,12 @@ Status AsuClientImpl::DispatchTask(const ClientTaskContextPtr& ctx)
                 auto lockedCtx = weakCtx.lock();
                 if (lockedCtx) { OnTransportTaskComplete(lockedCtx, asuId, transTaskId); }
             });
+        if (!status.ok()) {
+            return WithContext(status, "register completion callback, asuId=" +
+                                           std::to_string(subTask.asuId));
+        }
     }
     return Status::OK();
-}
-
-bool AsuClientImpl::PollTask(const ClientTaskContextPtr& ctx)
-{
-    auto snapshot = ctx == nullptr ? nullptr : ctx->viewSnapshot;
-    if (!ctx || ctx->Done()) { return true; }
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    if (ctx->Done()) { return true; }
-    if (!snapshot || ctx->state.load(std::memory_order_acquire) != ClientTaskState::INFLIGHT) {
-        return false;
-    }
-
-    bool allDone = true;
-    bool anyFailed = false;
-    for (auto& subTask : ctx->subTasks) {
-        if (subTask.completed) {
-            anyFailed = anyFailed || subTask.failed;
-            continue;
-        }
-
-        auto transIter = snapshot->transports.find(subTask.asuId);
-        if (transIter == snapshot->transports.end()) {
-            subTask.completed = true;
-            subTask.failed = true;
-            anyFailed = true;
-            continue;
-        }
-
-        TaskResult subResult;
-        auto status = transIter->second->Check(subTask.transTaskId, subResult);
-        if (!status.ok()) {
-            subTask.completed = true;
-            subTask.failed = true;
-            anyFailed = true;
-            continue;
-        }
-        if (subResult.status.code == StatusCode::IN_PROGRESS) {
-            allDone = false;
-            continue;
-        }
-        subTask.completed = true;
-        if (!subResult.status.ok()) {
-            subTask.failed = true;
-            anyFailed = true;
-        }
-
-        const auto& originalIndices = subTask.originalIndices;
-        for (std::size_t i = 0; i < originalIndices.size() && i < subResult.entryStatus.size();
-             ++i) {
-            ctx->entryStatus[originalIndices[i]] = subResult.entryStatus[i];
-        }
-    }
-
-    if (allDone) {
-        ctx->finalStatus =
-            anyFailed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
-                      : Status::OK();
-        ctx->state.store(anyFailed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED,
-                         std::memory_order_release);
-        ctx->cv.notify_all();
-        return true;
-    }
-    return false;
 }
 
 void AsuClientImpl::OnTransportTaskComplete(const ClientTaskContextPtr& ctx, AsuId asuId,
@@ -658,98 +618,6 @@ Status AsuClientImpl::BuildResult(const ClientTaskContextPtr& ctx, TaskResult& r
     result.entryStatus = ctx->entryStatus;
     result.queryResult.reset();
     return result.status;
-}
-
-Status AsuClientImpl::WaitTaskContext(const ClientTaskContextPtr& ctx, std::uint64_t timeoutMs,
-                                      TaskResult& result)
-{
-    if (ctx == nullptr) {
-        return Status::Error(StatusCode::TASK_NOT_FOUND, "client task not found");
-    }
-
-    const auto waitMs = timeoutMs == 0 ? config_.defaultWaitTimeoutMs : timeoutMs;
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(waitMs);
-    auto snapshot = ctx->viewSnapshot;
-
-    std::unique_lock<std::mutex> lock(ctx->waitMu);
-    while (!ctx->Done()) {
-        if (!snapshot || ctx->state.load(std::memory_order_acquire) != ClientTaskState::INFLIGHT) {
-            if (std::chrono::steady_clock::now() >= deadline) {
-                BuildResult(ctx, result);
-                result.status = Status::Error(StatusCode::TIMEOUT, "client task wait timeout");
-                return result.status;
-            }
-            ctx->cv.wait_until(lock, deadline);
-            continue;
-        }
-
-        bool allDone = true;
-        bool anyFailed = false;
-        for (auto& subTask : ctx->subTasks) {
-            anyFailed = anyFailed || subTask.failed;
-            if (subTask.completed) { continue; }
-
-            auto transIter = snapshot->transports.find(subTask.asuId);
-            if (transIter == snapshot->transports.end()) {
-                subTask.completed = true;
-                subTask.failed = true;
-                anyFailed = true;
-                continue;
-            }
-
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) {
-                BuildResult(ctx, result);
-                result.status = Status::Error(StatusCode::TIMEOUT, "client task wait timeout");
-                return result.status;
-            }
-            const auto remainingMs =
-                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
-            const auto subTimeoutMs =
-                static_cast<std::uint64_t>(std::max<std::int64_t>(1, remainingMs));
-
-            TaskResult subResult;
-            auto status = transIter->second->Wait(subTask.transTaskId, subTimeoutMs, subResult);
-
-            if (status.code == StatusCode::TIMEOUT) {
-                BuildResult(ctx, result);
-                result.status = Status::Error(StatusCode::TIMEOUT, "client task wait timeout");
-                return result.status;
-            }
-            if (status.code == StatusCode::IN_PROGRESS ||
-                subResult.status.code == StatusCode::IN_PROGRESS) {
-                allDone = false;
-                continue;
-            }
-            subTask.completed = true;
-            if (!status.ok() || !subResult.status.ok()) {
-                subTask.failed = true;
-                anyFailed = true;
-            }
-
-            const auto& originalIndices = subTask.originalIndices;
-            for (std::size_t i = 0; i < originalIndices.size() && i < subResult.entryStatus.size();
-                 ++i) {
-                ctx->entryStatus[originalIndices[i]] = subResult.entryStatus[i];
-            }
-        }
-
-        for (const auto& subTask : ctx->subTasks) {
-            allDone = allDone && subTask.completed;
-            anyFailed = anyFailed || subTask.failed;
-        }
-        if (allDone) {
-            ctx->finalStatus = anyFailed ? Status::Error(StatusCode::PARTIAL_FAILED,
-                                                         "client task partially failed")
-                                         : Status::OK();
-            ctx->state.store(anyFailed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED,
-                             std::memory_order_release);
-            ctx->cv.notify_all();
-            break;
-        }
-    }
-
-    return BuildResult(ctx, result);
 }
 
 Status AsuClientImpl::UnregisterRegions(const std::vector<MRHandle>& handles)
@@ -985,7 +853,12 @@ Status AsuClientImpl::DrainTasksBeforeShutdown(std::uint64_t waitTimeoutMs)
 
         if (!ctx->Done()) {
             TaskResult result;
-            auto status = WaitTaskContext(ctx, waitTimeoutMs, result);
+            const auto waitMs = waitTimeoutMs == 0 ? config_.defaultWaitTimeoutMs : waitTimeoutMs;
+            std::unique_lock<std::mutex> lock(ctx->waitMu);
+            const bool done = ctx->cv.wait_for(lock, std::chrono::milliseconds(waitMs),
+                                               [ctx] { return ctx->Done(); });
+            auto status = BuildResult(ctx, result);
+            if (!done) { status = Status::Error(StatusCode::TIMEOUT, "client task wait timeout"); }
             if (!status.ok() && finalStatus.ok()) { finalStatus = status; }
         }
         (void)taskManager_.Remove(ctx->taskId);

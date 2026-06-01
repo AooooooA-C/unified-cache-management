@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <memory>
@@ -53,6 +54,7 @@ struct TestState {
     std::vector<AsuId> waitCalls;
     std::vector<AsuId> cancelCalls;
     std::unordered_map<AsuId, TaskId> childTaskIds;
+    std::unordered_map<TaskId, std::function<void(TaskId)>> completionCallbacks;
 };
 
 class FakeTransport : public AsuTransport {
@@ -166,9 +168,13 @@ public:
         return Status::OK();
     }
 
-    Status Cancel(TaskId) override
+    Status Cancel(TaskId taskId) override
     {
         state_->cancelCalls.emplace_back(config_.asuId);
+        auto callbackIter = state_->completionCallbacks.find(taskId);
+        if (callbackIter != state_->completionCallbacks.end() && callbackIter->second) {
+            callbackIter->second(taskId);
+        }
         return Status::OK();
     }
 
@@ -193,6 +199,23 @@ public:
     {
         state_->waitCalls.emplace_back(config_.asuId);
         return Check(taskId, result);
+    }
+
+    Status SetCompletionCallback(TaskId taskId, std::function<void(TaskId)> callback) override
+    {
+        if (taskId == kInvalidTaskId) {
+            return Status::Error(StatusCode::TASK_NOT_FOUND, "fake task not found");
+        }
+
+        state_->completionCallbacks[taskId] = callback;
+        auto statusIter = state_->checkResultStatus.find(config_.asuId);
+        if (statusIter != state_->checkResultStatus.end() &&
+            statusIter->second.code == StatusCode::IN_PROGRESS) {
+            return Status::OK();
+        }
+
+        if (callback) { callback(taskId); }
+        return Status::OK();
     }
 
     Status StubCheck(TaskId taskId, TaskResult& result) override { return Check(taskId, result); }
@@ -1152,6 +1175,10 @@ TEST(AsuClientImplTest, Task_CheckKeepsInProgressTaskUntilCompletion)
     EXPECT_EQ(status.code, StatusCode::IN_PROGRESS);
 
     state->checkResultStatus.erase(10);
+    auto callbackIter = state->completionCallbacks.find(state->childTaskIds[10]);
+    ASSERT_NE(callbackIter, state->completionCallbacks.end());
+    callbackIter->second(state->childTaskIds[10]);
+
     status = client->Check(taskId, result);
     ASSERT_TRUE(status.ok()) << status.message;
 
@@ -1241,32 +1268,9 @@ TEST(AsuClientImplTest, Task_WaitRemovesTaskAfterCompletion)
 
 TEST(AsuClientImplTest, Task_WaitTimeoutKeepsTaskForLaterCompletion)
 {
-    class TimeoutOnceTransport final : public FakeTransport {
-    public:
-        explicit TimeoutOnceTransport(std::shared_ptr<TestState> state)
-            : FakeTransport(std::move(state))
-        {
-        }
-
-        Status Wait(TaskId, std::uint64_t, TaskResult& result) override
-        {
-            if (!timedOut_) {
-                timedOut_ = true;
-                result.status = Status::Error(StatusCode::TIMEOUT, "fake wait timeout");
-                return result.status;
-            }
-            return FakeTransport::Check(1000, result);
-        }
-
-    private:
-        bool timedOut_{false};
-    };
-
     auto state = std::make_shared<TestState>();
-    auto client = CreateAsuClient([state] {
-        ++state->createdTransports;
-        return std::unique_ptr<AsuTransport>(new TimeoutOnceTransport(state));
-    });
+    state->checkResultStatus[10] = Status::Error(StatusCode::IN_PROGRESS, "fake in progress");
+    auto client = CreateAsuClient(MakeFactory(state));
     ASSERT_TRUE(client->Init(MakeConfig({10})).ok());
 
     TaskId taskId = 0;
@@ -1280,6 +1284,11 @@ TEST(AsuClientImplTest, Task_WaitTimeoutKeepsTaskForLaterCompletion)
     TaskResult result;
     status = client->Wait(taskId, 10, result);
     EXPECT_EQ(status.code, StatusCode::TIMEOUT);
+
+    state->checkResultStatus.erase(10);
+    auto callbackIter = state->completionCallbacks.find(state->childTaskIds[10]);
+    ASSERT_NE(callbackIter, state->completionCallbacks.end());
+    callbackIter->second(state->childTaskIds[10]);
 
     status = client->Wait(taskId, 10, result);
     EXPECT_TRUE(status.ok()) << status.message;

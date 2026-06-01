@@ -437,8 +437,23 @@ void AsuTransportImpl::StubCompleteTask(const TransportTaskContextPtr& ctx)
             }
             UC_DEBUG("AsuTransportImpl::CompleteTask task_id={} Send OK + INFLIGHT on ch_id={}",
                      ctx->taskId, channel->GetChannelId());
-            ctx->finalStatus = Status::OK();
-            ctx->cv.notify_all();
+            {
+                std::lock_guard<std::mutex> lock(ctx->waitMu);
+                if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
+                    channel->ReleaseInflight();
+                    ctx->cv.notify_all();
+                    return;
+                }
+                if (ctx->opType == TransportOpType::QUERY) {
+                    ctx->queryResult.exists.assign(ctx->keys.size, 0);
+                    ctx->queryResult.prefixHitKeys = 0;
+                }
+                ctx->finalStatus = Status::OK();
+                ctx->state.store(TransportTaskState::COMPLETED, std::memory_order_release);
+                channel->ReleaseInflight();
+                ctx->cv.notify_all();
+            }
+            NotifyCompletion(ctx);
             return;
         }
         UC_DEBUG(

@@ -176,6 +176,7 @@ struct ClusterState {
     std::unordered_map<AsuId, std::size_t> loadCalls;
     std::unordered_map<AsuId, std::size_t> storeCalls;
     std::unordered_map<AsuId, std::size_t> deleteCalls;
+    std::unordered_map<TaskId, std::function<void(TaskId)>> completionCallbacks;
     TaskId nextTaskId{1};
     std::size_t createdTransports{0};
     std::size_t shutdownTransports{0};
@@ -449,6 +450,21 @@ public:
     Status Wait(TaskId taskId, std::uint64_t, TaskResult& result) override
     {
         return Check(taskId, result);
+    }
+
+    Status SetCompletionCallback(TaskId taskId, std::function<void(TaskId)> callback) override
+    {
+        bool complete = false;
+        {
+            std::lock_guard<std::mutex> lock{state_->mutex};
+            if (state_->tasks.find(taskId) == state_->tasks.end()) {
+                return Status::Error(StatusCode::TASK_NOT_FOUND, "fake ASU task not found");
+            }
+            state_->completionCallbacks[taskId] = callback;
+            complete = true;
+        }
+        if (complete && callback) { callback(taskId); }
+        return Status::OK();
     }
 
     Status StubCheck(TaskId taskId, TaskResult& result) override { return Check(taskId, result); }

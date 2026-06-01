@@ -109,16 +109,11 @@ private:
 
     // Sends each subtask to its routed transport and records transport task ids.
     Status DispatchTask(const ClientTaskContextPtr& ctx);
-    // Polls transport subtasks and copies completed entry statuses back by original index.
-    bool PollTask(const ClientTaskContextPtr& ctx);
     // Handles a transport completion callback for one routed subtask.
     void OnTransportTaskComplete(const ClientTaskContextPtr& ctx, AsuId asuId,
                                  TaskId transTaskId);
     // Converts a client task context into the public task result shape.
     Status BuildResult(const ClientTaskContextPtr& ctx, TaskResult& result);
-    // Waits for one client task context until completion or timeout.
-    Status WaitTaskContext(const ClientTaskContextPtr& ctx, std::uint64_t timeoutMs,
-                           TaskResult& result);
 
     // Performs one query attempt on the current snapshot.
     Status QueryOnce(const std::vector<CacheKey>& keys, const QueryOptions& options,
