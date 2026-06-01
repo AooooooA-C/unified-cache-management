@@ -1,0 +1,577 @@
+[33mca15956[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mtask_manager_w_indexpool[m[33m, [m[1;31mcaz/task_manager_w_indexpool[m[33m)[m reuse IndexPool for task slot free list
+[33m0aa5709[m[33m ([m[1;32masu-task-slots[m[33m)[m Optimize ASU task manager with lock-free slots
+[33m32513bf[m[33m ([m[1;31mucm/feature_26h1[m[33m, [m[1;32mfeature_26h1[m[33m)[m [Feat] add connection manager (#978)
+[33m877946d[m [Feat] Add ASU SQE protocol implementations (#977)
+[33m518c842[m [Feat] Implementation of AsuClient. (#967)
+[33mbb78acc[m [Feat] Add initial async task manager for ASU (#971)
+[33m7443a98[m [Misc] add codeowners of ucm/transport (#969)
+[33ma6a0b53[m [Feat] Add ASU skeleton (#962)
+[33me418c03[m [feat] New directories and files based on the 2026 H1 architecture
+[33m52b0f54[m[33m ([m[1;33mtag: [m[1;33mv0.5.0[m[33m, [m[1;31mucm/main[m[33m, [m[1;31mucm/0.5.0-release[m[33m)[m switch version to 0.5.0 (#956)
+[33mbb75ed4[m support hma using FAWA (#953)
+[33meb70add[m [Feat] Add backend-only cache load mode (#951)
+[33me68bad8[m feat: Optimize CompressStore log printing and add Compress Store user… (#949)
+[33mb580d2a[m [Feat] Add UCM store compression module and compression config parametersFeature store compress (#940)
+[33m9222bd8[m feat(test): Add TPOT metric calculation and update test configuration (#944)
+[33m85a5d82[m [CI] Remove long-running e2e tests from PR gate (#947)
+[33m1c0a081[m [Bugfix] Add init.py (#943)
+[33m631049d[m [Doc] Distributed PD Disaggregation on Ascend (#921)
+[33m3b26ce4[m [BugFix] Add patch for local_cache_hit calculation in vllm 0.18.0 met… (#941)
+[33mf0323d4[m [feat] Add switch to log rate limit (#931)
+[33m04399fb[m [BugFix] Fix the issue of multiple processes enabling GC in multi-node DP scen… (#937)
+[33m8a667a9[m Dev bugfix qyh (#935)
+[33m8f450c8[m [fix]Add patch for finalize_kv_cache in 0.18.0rc1 (#934)
+[33m10c3a2f[m [Fix] Strengthen save/load exception check and remove unused codes (#929)
+[33mdbfa862[m [bugfix]fix mtp_layer calls wait_for_layer_load multiple times (#932)
+[33me6ca062[m [Fix] Update KVCacheLayout to set row counts. (#920)
+[33m42afd8b[m [Fix] Fix dump err when 0 < len(load_blocks) < fully hit (#927)
+[33m3a11f16[m [Fix] Not print hit rate when using 1tp (#926)
+[33m4fc0c9f[m [Opt] Support setting a threshold for kv_cache storage (#925)
+[33ma333063[m [Fix]TransBuffer: shared freeHead let Dump bypass the reserved limit and ring bounds (#924)
+[33m101f355[m [Feat] Support recording hit rate (#917)
+[33m100a788[m [Feat] add layerwise KV load patch for vllm-ascend v0.18.0 on DSA model (#911)
+[33me9bb421[m [CI] add metrics config into package (#916)
+[33mb163cd0[m[33m ([m[1;31mucm/0.5.0rc2-release[m[33m)[m release 0.5.0rc2 (#915)
+[33mc2b957a[m [Opt] Support generate traces (#912)
+[33m8ecaa86[m [Feature] Add SGLang UCM integration via dynamic backend loading (#886)
+[33mc66812d[m [doc] Update SGLang quickstart docs & Update SGLang Dockerfile (#891)
+[33me26fa0b[m feat(kv_cache_calculator): Add New Model Supports (#899)
+[33mf7b8a94[m [opt] Support full-graph replay for GSA-enabled sparse attention (#907)
+[33m1673933[m [CI] refactor dockerfile (#902)
+[33mf531458[m [opt] Prevent Load starvation by reserving buffers for high-priority operations (#895)
+[33m9d6abcd[m [Fix] Duplicate metrics registration (#901)
+[33m457be0c[m [Bugfix] Fix the bug of connector matadata assert failure (#897)
+[33mcdd4406[m [doc] Update supported compute platforms (#896)
+[33m054a3a8[m [doc] Update quickstart and calculator config (#890)
+[33md5520f6[m [Perf] Pipeline-friendly shard task submission in CacheStore (#888)
+[33mcab8450[m [BugFix] Fix the bug where non-DP0 processes fail to update file hotness in DP scenarios. (#884)
+[33md941cdf[m [Feat]: add profiling switch for performance test (#875)
+[33m329306d[m release 0.5.0rc1 (#881)
+[33mfcb9ef1[m [doc] Update support matrix. (#880)
+[33m5ca31b2[m [bugfix] Fix MLA block_table row mapping (#882)
+[33m25fa014[m [CI] add test set config (#877)
+[33m7a3e408[m [Feature] Garbage Collection (#777)
+[33me64a54b[m [test] multi-processor test on AIO and Shm (#873)
+[33m9785177[m [Usage] Move use layerwise and hit ratio into config file (#784)
+[33m866ba78[m [Build] Update UCM Dockerfiles for vLLM/vLLM-Ascend v0.17.0 (#876)
+[33m6e7c053[m [Feat] adapt for DSA model on CUDA platform (#871)
+[33m478d98b[m [feat] log with rate limit (#821)
+[33mfcbb273[m [fix]Submit layerwise KV load tasks one layer at a time (#783)
+[33m3006e42[m [feat] Add tensor parallel size support and update GPU memory utilization for online inference tests (#874)
+[33m23c6858[m [refactor] Remove NVML-based CPU affinity setting (#870)
+[33m9d72aed[m add timeout for PR gate pipeline (#862)
+[33m75bb615[m [bugfix] Get all CPUs for the device's local socket (#869)
+[33m3062203[m [opt] Enhance NPU CPU affinity resolution with NUMA fallback (#865)
+[33m92f4119[m [opt] stack-protector on EmptyStore (#866)
+[33m073aaec[m [CI] Add gsa online test (#857)
+[33md2ef8fe[m [fix] Update patch to track mindie changes (#863)
+[33ma82a043[m [Bugfix] fix offline patch (#864)
+[33m415511d[m [feat] Add NUMA-aware CPU core split for vllm worker and store threads (#854)
+[33mdcbcb3c[m [feat] Support kvcsstore (#855)
+[33mc4b803f[m [opt] Optimize GSA by fusing operators (#861)
+[33me6fc288[m [feat] Store provides the ability to configure CPU affinity. (#852)
+[33m7c244de[m [bugfix] Update seq_lens_list only on NPU path (#860)
+[33m13bfd47[m [opt] Cancel all timed-out tasks at once. (#859)
+[33mba1ec19[m [Feat] Add mindie-llm support (#848)
+[33mffb11b4[m [opt] Cancel the Load/Dump task proactively after it times out. (#853)
+[33m29bdab4[m [opt] Remove redundant step(`Install GTest`) from the workflow. (#851)
+[33m734318c[m [feat] Ascend: add mmap-based Host memory for O_DIRECT support (#850)
+[33m351fe2e[m [fix]Add timeout in PosixStore working thread (#849)
+[33m7821d6f[m [opt] Add parallel size check in CI (#844)
+[33me68943f[m [Feat] Adding an environment variable input (#837)
+[33m384cef1[m [CI] fix the gsaondevice offline test ci (#824)
+[33m4869e61[m [Bugfix] The script failed to start CUDA multi-node service (#839)
+[33m2423da5[m [feat] adapt PP for use_layerwise=True (#816)
+[33m761c3dd[m release 0.4.0 (#834)
+[33m971de45[m [opt] Add strip and stack-protector compile options in release build mode (#832)
+[33m4c6a069[m [Build] Adjust wrapt dependency version (#835)
+[33m2f87fc0[m [CI][Build] Update Dockerfile for vllm (vllm_ascend) 0.11.0 (#813)
+[33m8149527[m [doc] Update feature support matrix and readme. (#830)
+[33mb61d849[m Fix skipping interface auto-detection (#811)
+[33mc9d8042[m [doc] Add model support and feature compatibility document (#826)
+[33mb3dfa8e[m [Docs] Add documention for monkey patch v0.11.0 (#822)
+[33ma6f1080[m [feat] log compatible with vllm v0.16.0 (#825)
+[33m1af5cfe[m [Bugfix] Adapt prefix cache for GQA/MLA to support vLLM >= 0.14.0 (#818)
+[33mf17e578[m [Refactor] Update monkey patch framework and remove deprecated implementation (#806)
+[33mbee275b[m [Fix] fix online test conflict with vllm server on same host (#814)
+[33m0535415[m [fix] Resolving circular dependencies between stacked Stages in PipelineStore (#817)
+[33m49396eb[m [Fix] Fix hashset deletion probing and optimize TopNHeap insertion path (#820)
+[33m332b7ec[m [fix] Add mutex/lock to the local mode cache. (#819)
+[33mfb30e09[m [Feat] Add monkey patch for sparse on ascend (#791)
+[33m33cc902[m [bugfix] NPU GQA Accurancy under Graph Mode (#810)
+[33m167a3c3[m feat(test): Support result saving functionality for multiple storage (#764)
+[33macd7518[m [Docs] Add DeepWiki reference to UCM user guide. (#815)
+[33mc1bc7ae[m [Fix] fix perf test bug (#809)
+[33m366b0a7[m [fix] log exception (#808)
+[33mf46f77b[m [opt]Add UcmPipelineStore and layerwise in CI (#786)
+[33m54fcada[m [Fix] Set sink_token of cuda_hamming_topk equal to block size. (#796)
+[33m1c3f21c[m [Build] add sparse configs (#805)
+[33m72b968b[m [CI] replacing offline e2e test with online e2e test (#782)
+[33mced64da[m [bugfix] Fix CUDA full graph for DeepSeek implementation (#799)
+[33mac4328f[m [refactor] eliminate redundant Pimpl idiom in dynamically-loaded component (#797)
+[33mbc1547e[m [feat] enable external PC hit for MLA on CUDA and NPU (#785)
+[33m957f0d6[m [opt] PosixStore supports the selection and switching of different IO engines. (#787)
+[33mc01675c[m [Build] add execute permission for .run (#794)
+[33ma9a6485[m [Build] update gsa build scripts (#789)
+[33m12771c0[m [fix]Add __init__.py in patch (#793)
+[33m42a8f15[m [Fix] change package 'wrapt' version (#792)
+[33m551d1c3[m [Fix] Fix the excessive TPOT latency by modifying update_attn_params (#788)
+[33m52681c5[m [opt]Add patch config and dev_mode config in config.properties (#790)
+[33m9d2b8f4[m [Feat] Adapt new monkey patch framework for vllm & vllm_ascend 0.11.0, supporting KV cache load recovery and graph compilation modes fix for UCM layerwise connector (#780)
+[33md83b854[m [opt]Add event to sync (#768)
+[33m2e97b73[m [fix] logger add debug_once (#781)
+[33mae00195[m [bugfix] Fix padded block tables in graph mode for vllm-ascend v0.11.0  (#779)
+[33m6686e20[m [Bugfix] Correct MLA Threshold Gating for GSA (#778)
+[33m70f1216[m Fix padded query start loc bug for vllm-ascend v0.11.0 (#774)
+[33m13138c9[m [feat] enhance logger compatibility (#760)
+[33me22cdc3[m [opt] supports loading non-built-in connectors (#776)
+[33mc367a98[m [fix] remove imports that specific to platform (#771)
+[33m0e5d485[m [opt] enable Ascend register pin optimization (#775)
+[33me53d881[m [opt] Define `UCM_ROOT_DIR` to ensure safety when used UCM as a sub-repository (#772)
+[33mde27651[m [feat] Introduce platform-specific sparse trigger thresholds for GPU and NPU (#762)
+[33m590695e[m [Opt] update deepseek r1 config (#770)
+[33ma1e0e67[m [Refactor]monkey patch sparse feature in v0.11.0 (#743)
+[33md53ae68[m [Fix] Add __init__.py for rerope. (#769)
+[33m667b164[m [Feat] adapt dcp&pcp (#750)
+[33m6686b46[m Fix batch_size_for_hamming bug when slice is disabled (vllm-ascend 0.11.0) (#765)
+[33m94fa175[m [Fix] fix save_speed core dump and loaded blocks num when task failed (#763)
+[33mac6ad65[m [Feat] sparse patch for gsa on device(MLA) va0.11.0 (#761)
+[33md9294de[m [feat] GSAOnDevice for MLA Models Like DeepSeek V2/V3 in Ascend NPU (#746)
+[33m5a57107[m chore(test): Ensure that unnecessary import failures do not affect test execution (#754)
+[33m855bcd0[m [Feature] Integrate UnifiedCache (UCM) into SGLang for Multi-Level Caching System (#757)
+[33mf332741[m [fix] fix zlib gitcode url (#758)
+[33md217051[m [opt] CUDA Hamming Distance Kernel Optimization for GQA (#755)
+[33mee6b008[m [Test] Remove memory manager abstraction in PosixStore e2e test (#753)
+[33mda43b74[m [Fix] Modify the config files of gsaondevice. (#749)
+[33mebf655d[m [test & bugfix] fix low dump performance in posixstore e2e test (#751)
+[33mc67ee79[m [bugfix & opt] gsaOnDevice for CUDA Graph mode (#732)
+[33m37415e6[m [Opt] Add log timestamp in run_vllm.sh (#747)
+[33m4a1fbcd[m [opt]Adapt variable io size (#745)
+[33m29942a1[m [opt] Print `TaskId` in the CacheStore Error Log (#742)
+[33mc7d4970[m [Opt]Split the thread pool into separate load and dump pools to prevent them from interfering with each other. (#744)
+[33mb48bc6a[m [Feat]: Implement load failure recovery via monkey patch (#738)
+[33mfa1b77d[m [CI] refine docker file to use in yellow field (#741)
+[33m3e25c0f[m [Opt] Enable concurrent prefix lookup for posixstore (#739)
+[33m8a2a8c0[m [feat] Variable length IO supported in CacheStore (#734)
+[33m183a263[m [Feat] Add csrc/ascend NPU custom ops for GSA (#729)
+[33m48d0488[m [Feat]: Monkey patch framework for vllm 0.11.0, fix graph mode + UCM bugs (#735)
+[33m57a27cf[m [opt] Increase the default running queue depth to support greater concurrent requests. (#733)
+[33md5bb77f[m [Feat] Reuse-aware layer skipping under dynamic KV sparsification (#725)
+[33m4837015[m [opt] Default depth of the waiting queue needs to be increased by nShard times for layer-wise (#731)
+[33m432ca10[m [Feat]Add layerwise and log_path config in run.sh (#724)
+[33m172cfbb[m [Feat] sparse patch for gsa on device(GQA) va0.11.0rc1 (#726)
+[33m233a4fa[m [perf] Copy Bandwidth Optimize: Multi-Stream parallelism supported in CacheStore (#722)
+[33me7b1129[m [Bugfix]Fix garbled output when tp > 1 (#716)
+[33mb80001b[m [Feat] sparse patch for vllm-ascend v0.11.0 (#718)
+[33me302cba[m [bugfix] Adaptive modification of llmperf (#719)
+[33m2adcc7c[m [Feature] Add readme and dataset in performance and evaluation test (#721)
+[33mc8bb3fc[m [CICD] run e2e test in docker (#712)
+[33m297d655[m [bugfix] rerope feature for vllm0.9.2 and git apply merging (#708)
+[33mf22696b[m [bugfix] Fixed the issue of invalid LocalBuffer pointers in PCStore (#715)
+[33m2ccbdd3[m [bugfix] fix debug log printing (#706)
+[33m771d5a7[m [perf] Reduce directory lock conflicts during batch dumps in PosixStore (#707)
+[33m4695d36[m [feat] rerope feature for vllm0.11.0 (#686)
+[33m6cac4da[m [bugfix] rm unavailable lib and fix doc and update patch (#699)
+[33m977f752[m [Bugfix] Cherry-pick modify worker_id to distinguish diff workers(#691) (#701)
+[33m9385fb4[m [CI] logger use zlibstatic (#698)
+[33m95df8b9[m [doc] How to extend UCM Store (#692)
+[33m0f2ce30[m [fix] Fix logger (#690)
+[33m5269d64[m [opt] Refactor PipelineStore for Enhanced Scalability (#689)
+[33m2191f42[m [fix] clean code (#688)
+[33m9434a12[m [refactor] Rename global rank and remove broadcast function (#685)
+[33m4423af4[m [WIP] rewrite logger module (#608)
+[33m1a85610[m [CI] Modify pull request template (#687)
+[33m4adcfe7[m [Opt] GsaOnDevice cuda bugfix & optimization (#659)
+[33m6746f8b[m [doc] Add Code of Conduct (#684)
+[33mf6bffc0[m [fix] Adapt ESA to the LayerWiseConnector (#681)
+[33ma707e09[m release 0.3.0 (#677)
+[33mea57b57[m [CI] remove logger, check branch up-to-date, fast fail e2e test (#674)
+[33m92de9f9[m [Fix] Failed to start vLLM service using multi-node launch scripts under CUDA data parallelism (#670)
+[33m720b122[m [test]Evaluate model performance and accuracy with UCM (#642)
+[33m1fa0614[m [CI] use requirements file to prepare test env (#673)
+[33mfe41fdd[m [Doc] Update documents related to sparse. (#672)
+[33m6000d75[m [opt] adapt cache blend for store and sparse's new version (#664)
+[33m3ccbd66[m [Fix] coredump if add new c++ metrics (#666)
+[33m015a128[m [feat] add monkey patch for gsa on device v0.9.2 (#618)
+[33mc4f58fe[m [misc] Reduce gpu utilization to 6GB in test for 1.5B model (#665)
+[33md6e6a47[m [Opt] Gsa npu performance optimize (#647)
+[33md63a467[m add pr gate workflow (#662)
+[33mf5261e9[m [Feat] Update sparse method patches for vllm 0.11.0 (#638)
+[33mbf2e529[m [doc] Update quickstart section in README_zh (#663)
+[33mf082b03[m [Fix] Modify ucm_connector to adapt metrics (#658)
+[33mdaad723[m [feat]Add Layerwise Connector (#656)
+[33m6f90147[m [Feat] Support C++/Python to use same metrics singleton within a process (#654)
+[33mb1e95c6[m New gsa config (#646)
+[33mf845eed[m [doc]Implement the function of a kv cache calculator html in User Guide (#652)
+[33m8cc9b74[m [doc] Add contributing guide (#648)
+[33mcd4239f[m [feat] PipelineStore Architecture Refresh and Capability Enhancement (#653)
+[33m6f268f4[m [Bugfix] Fix 3FS (#650)
+[33m99eebe3[m [feature]Add LLM connection base components and OpenAI connector (#636)
+[33m5c48af8[m [Feat] Basic scripts for deployment best practices (#556)
+[33mac75dcf[m [Doc] 3FS Document (#637)
+[33m28bd751[m [optimize]Optimized LLMPerf Test Cases (#634)
+[33m269b8af[m [Feature] 3FS Store (#622)
+[33m480086a[m Unify xSA name as GSA
+[33m5e066d6[m [bugfix] fix register_kv_caches patch (#629)
+[33m0ab52c2[m [doc]rename pipline_store to pipeline_store (#626)
+[33m9f88027[m [bugfix] ] Cherry-pick updates from 0.2.0-release (hamming compile) (#625)
+[33mddfc936[m [feat] Cherry-pick updates from 0.2.0-release to develop (patches and docs) (#623)
+[33mc98f134[m [fix]Sync changes from the release branch to develop. including docs、version and dockerfile (#621)
+[33md71ea0e[m [fix] remove request_succeed_dumped_blocks() in monkey patch (#613)
+[33m85cbb67[m [docs]Add doc for pipeline store (#607)
+[33m374568d[m [bugfix] bugfix in PCStore, cherry-pick from release (#609)
+[33m7fd78ec[m [feat] KVComp in NPU -- HBM version
+[33m3128dbe[m [Misc] add qiongwu as codeownner (#610)
+[33m43c9dd2[m [docs] Modify blend introduction (#605)
+[33m313ca73[m Modify blend and rerope docs (#593)
+[33m1dad118[m [fix]fix clean code (#601) (#602)
+[33m77ba17d[m [misc] split dependency preparation logic into individual dependency files for enhanced configuration flexibility (#597)
+[33m79d502a[m [fix]cherry-pick clean code and set local_rank_size to tp_size (#596) (#600)
+[33mce981c4[m [bugfix] share buffer used out (cherry-picked from #592) (#598)
+[33mc24be03[m [bugfix] kvcomp for qwen (#594)
+[33m6899198[m feature for triton rerope (#497)
+[33mea76b36[m [feat] KvCompOnDevice: per-KV-head Top-K for Qwen (#589)
+[33m1e1c3e6[m [bugfix] kvcomp config (#584)
+[33md608be8[m [bugfix]cherry pick from 0.2.0-release sparse patch & cmake (#581)
+[33m9727314[m [feat]Update data file layout to adapt to garbage collection (#579)
+[33mbad1554[m [bugfix] build hamming dist (#577)
+[33m24e7517[m [fix]cherry pick from 0.2.0-release fix monitor issue (#572) (#575)
+[33m44aba9c[m [bugfix] cherry-pick from 0.2.0release patch update (#574)
+[33m4c782b7[m [bugfix]cherry-pick from 0.2.0release Fix KeyError (#573)
+[33m6de2578[m [fix]Add exception handling (#569)
+[33m00d8796[m [feat] kvcomp on device (#559)
+[33m569e45c[m [Bugfix] Fix incorrect fallback in GetHostBuffer: use MakeHostBuffer instead of MakeDeviceBuffer (#568)
+[33m0b295a3[m [Bugfix] skip fresh shm files to avoid race between multiple instances (#566)
+[33m656f4ae[m [Bugfix] use-after-free in LookupBatch (#565)
+[33mc00f1bd[m [feat]use numpy to calculate addrs (#564)
+[33m070eb69[m [feat] Shard block files into subdirs by hash prefix, with opt-out switch (#561)
+[33m08b8694[m [Perf] parallel block-existence checks + timeout exception (#550)
+[33md9dc59c[m [Feat] New Store Impl: CacheStore - PosixStore - PipelineStore (#553)
+[33m80e8cfc[m [Fix]Add PLATFORM reminder (#526)
+[33m1bfb325[m [fix] move init to intergration/vllm directory (#535)
+[33m4907197[m feat(test): Add PostgreSQL support and optimize database write logic (#507)
+[33mc6d6796[m [bugfix]fix setup.py (#520) (#521)
+[33m319421f[m merge Feature_store_next to develop (#518)
+[33mfd32928[m [Feature] Cache Blend  (#467)
+[33m9a0b3ba[m [bugfix] fix pip install -e no so (#508)
+[33m3a0647b[m [bugfix] Adapt the patch to support YAML sections. (#480)
+[33m010844e[m [build] rewrite setup.py (#501)
+[33m523bbc4[m [docs] fix links in docs and add clarifications (#499) (#502)
+[33m105ea43[m [Feature] Added environment pre-check (#498)
+[33m598d018[m [Feature] Add performance and evaluation testing tools using the pytest framework (#462)
+[33m24e6bfa[m release v0.1.2 (#491)
+[33mc8d61fa[m [build] fix build by source distribution (#484)
+[33mb1f5667[m [bugfix]add synchronize on ascend platform (#485)
+[33m3476145[m [feat] Add configurable scattergatter option for pcstore (#483)
+[33ma3658e6[m [Feat] UCM supports recovery form load failure (#477)
+[33m79d250d[m [Docs] PD disaggregation documentation update (#479)
+[33m2950ce8[m feat: add MetaX MACA device support for PC (#387)
+[33m9fe0cf4[m release v0.1.1 (#478)
+[33ma96b240[m [docs] renew docs (#476)
+[33mc4edc28[m [Misc] fetch dependence from gitcode as backup (#469)
+[33m8397b4e[m [build]build sparse only if enabled (#470)
+[33m6d25397[m [build] project docs for pypi (#466)
+[33m260dfe7[m [cleancode]remove uc connector (#460)
+[33m43bdf01[m [fix] pick fixes from Release to develop (#465)
+[33md294808[m [cleancode] remove dramstore (#455)
+[33m783ea0f[m [rebase]Dev-ucm-v1 rebase to develop (#453)
+[33m52fe5a7[m [Misc] set default logger backend to spdlog (#440)
+[33m77f5090[m [bugfix] batch trans on cuda with SM return 700 error (#434)
+[33mfdc31df[m [perf] Modify CUDA SIMD and add Triton hash encoder (#408)
+[33m12ddd17[m [docs]add metrics doc (#416)
+[33mdc6e104[m [Misc] Add cpp-linter.yml (#422)
+[33md2623f6[m [Feature] Added performance testing tool based on the PyTest testing framework (#295)
+[33m116cc5b[m [Fix]remove dram docs and modify quick-start doc (#411)
+[33m53e65ba[m [opt] Remove unused cc impl of dramstore (#406)
+[33me83b944[m release v0.1.0rc4 (#402)
+[33m89c3736[m [bugfix] Fix ESA to be compatible with the latest NFSStore. (#401)
+[33m4efe8f5[m [opt] Share Infra implementation and unify status codes (#399)
+[33m5779ce9[m[33m ([m[1;33mtag: [m[1;33mv0.1.0rc4[m[33m)[m [fix] fix sparse attention (#397)
+[33m8b443e5[m release v0.1.0rc3 (#395)
+[33m6c38b65[m [fix] fix ascend attention (#394)
+[33mb6e5f62[m [feat] Add `pcstore` for enhanced PrefixCache performance (#393)
+[33mc87d6ef[m [Fix] fix build, fix no save kv layer (#390)
+[33m5c66fc8[m [feat] Add support for Ascend device memory transfers (#382)
+[33m3127481[m [feat] ucmtrans: Unify API for Device-Host Memory Transfers (#379)
+[33m16ed5da[m[33m ([m[1;33mtag: [m[1;33mv0.1.0rc2[m[33m)[m [Feat] Update the data items saved by trace replay (#366)
+[33m03c29bd[m [bugfix] add cmake option to bypass NUMA binding (#368)
+[33m1f8242c[m [Feat]Adapt to vllm-ascend0.9.1 and vllm-ascend0.11.0 (#362)
+[33m414c058[m prefetch bug (#360)
+[33m5c75d9a[m release v0.1.0rc2 (#373)
+[33meacd9ca[m [feat] add Mthreads MUSA device support -stage 1 (#370)
+[33m5a3a48f[m [build] auto patch for ascend (#372)
+[33m50d74bb[m [bug fix] Dev patch fix for sparse (#371)
+[33m2d4ed77[m[33m ([m[1;31mcaz/develop[m[33m, [m[1;31mcaz/HEAD[m[33m)[m [docs] update docs for v0.1.0rc1 (#365)
+[33m754f7ba[m[33m ([m[1;33mtag: [m[1;33mv0.1.0rc1[m[33m)[m [build] fix build v0.1.0rc1 (#363)
+[33me37b98c[m [feat] modify monkey patch for vllm-0.9.2 with cuda (#358)
+[33mc94b793[m [Fix] Fix iteration bug for async load task (#357)
+[33mde63b7c[m [Feature]implement multi-level testing framework with pytest (#313)
+[33m28f6f35[m [Fix]Added the 'transferIoDirect' option (#352)
+[33m00b9d56[m [Fix] Only mark last req as failed load req (#355)
+[33ma7d051e[m [Fix] Dump/load all tensors when use_layerwise=False (#351)
+[33m018c5ef[m [Docs]correct the error in docs (#340)
+[33mfeb498b[m [BugFix] esa & update patch (#350)
+[33m9e1401b[m [Fix] Revert dram store to python implementation (#346)
+[33m1b10c36[m KvComp-v1 (#338)
+[33m7283bcc[m [fix] pack whl with so files (#343)
+[33mb818ad2[m [Patch] Separate patch into different file by feature (#342)
+[33ma1d9058[m [bug fix]kvstar delta kvcache block select bugfix (#341)
+[33m95d9a23[m fix adapt deepseek (#339)
+[33m10a2eec[m Adapt ESA to support DeepSeek. (#335)
+[33m51ba639[m add heke as CODEOWNERS of /docs and /integration (#336)
+[33mb0412d8[m [feat] Re-use active block (#334)
+[33m29be755[m [enhance]optimize kvstar core bind method & delta kvcache swap (#330)
+[33m2ec56df[m Fix preemption for sparse attention module and add attention sink. (#333)
+[33m8622635[m [Feat]Add nfsstore bandwidth testing script (#323)
+[33m6512503[m [bug fix] fix recycleNum when less than 1 (#327)
+[33m022e187[m [Fix]Add import checking to trace_replay and fix the issue of unclose… (#309)
+[33mb01501a[m [Feat] Toy proxy now supports PD-mixed round-robin scheduling (#316)
+[33m1827635[m [Feat] Call scatter gather interface in dramstore (#324)
+[33m7004ab7[m [feat] capacity check for nfsstore (#315)
+[33m9708eee[m [bugfix] preserve DRAM buffer lifetime to restore inference accuracy (#322)
+[33m828bbbd[m [BugFix]fix mtp in ucm (#321)
+[33mb1b7be5[m Fix Cuda compilation (#317)
+[33mc4eb386[m [feat] hotness management for gc (#312)
+[33m7c8c9a3[m [Feat] add batch interface for device ops and implement `ScatterGather` with CUDA (#305)
+[33mb53b23a[m fix: only delete activated dir when it differs from archived dir
+[33mf7c3569[m new space shard layout with temp dir
+[33m2a82141[m clean code log print
+[33m6ab7167[m [Feat] Adapt Trace Replay to vLLM >= 0.10.2 (#303)
+[33mcb0a0f5[m [Feature]v091_patch add commit (#302)
+[33md2f3d9a[m  [Fix] Fix gpu_model_runner req_state update error for issue 283
+[33m8362969[m [Docs] Modify Readme Contact Us (#298)
+[33mc578037[m refactor: reusable transport abstraction & optimized NSFStore pipeline (#296)
+[33md9b68aa[m[33m ([m[1;31mcaz/feature_kvcomp[m[33m)[m [Misc] add store intf with tensor addr ptr (#288)
+[33m1f0f228[m [Fix] Each request in the decode instance encounters a load failure
+[33m99b09be[m [bugfix][#280] MLA layer size calculated wrong (#281)
+[33m477dc28[m [Docs]Improve the quick_start.md (#275)
+[33mb271703[m [Misc] add code owners (#274)
+[33mb05d8e7[m [Doc] update document link (#270)
+[33m7a82557[m[33m ([m[1;31mcaz/main[m[33m)[m Merge pull request #269 from mag1c-h/develop
+[33m032bb4f[m Update kvstar.md
+[33m70ffb31[m Merge branch 'develop'
+[33mb7ce463[m set cuda arch (#266)
+[33mcb56e5d[m Merge pull request #268 from HaoLi980405/develop_0930_new
+[33m9ec5136[m Update gsa.md
+[33macf98f6[m Merge pull request #267 from HaoLi980405/develop_0930_new
+[33m18ca373[m Update gsa.md
+[33m7c16de4[m Update kvcomp.md
+[33m80e9bb4[m Update gsa.md
+[33mdb7eb24[m Update kvcomp.md
+[33m7011434[m Update gsa.md
+[33m4681136[m [bugfix] fix gsa coredump (#265)
+[33mad5b285[m Update gsa.md
+[33mf7fdb62[m Update kvcomp.md
+[33m91f0118[m Update kvcomp.md
+[33mdfa9f12[m Update index.md
+[33mb985c34[m Update index.md
+[33m8fd66a4[m Update kvcomp.md
+[33m13137bd[m adapt kvstar move (#263)
+[33mec1517a[m update doc image (#264)
+[33m18ad5df[m [Doc] Update README.md
+[33mf93d435[m [Doc] Update README_zh.md
+[33m1cbd5ae[m [Doc] Update README.md
+[33m6aeee19[m Update README_zh.md
+[33m38b13c8[m [Doc] Update README.md
+[33m3512975[m mv kvstar to ucm/sparse
+[33m4b0338b[m mv kvstar tp ucm/sparse
+[33m97e1b1f[m Merge pull request #261 from zbb200819/develop_0929
+[33m586d05a[m Merge pull request #259 from ygwpz/develop
+[33me8e75fa[m Merge branch 'develop' into develop
+[33mcde6881[m Update README_zh.md
+[33m1fb6769[m edit readme
+[33ma751555[m Update README.md
+[33m304a3c0[m Create README_zh.md
+[33m16b4f82[m Merge branch 'ModelEngine-Group:develop' into develop
+[33m69c25f0[m [bugfix] index out of range (#223) (#258)
+[33m0ff2227[m [opt] update simd feature and docs (#256)
+[33m91856ac[m [bugfix]fix code style and ci (#257)
+[33mebee59e[m [fix] update logo in dark mode & fix spell error in doc
+[33m848c6b2[m modify spell
+[33m31caa6d[m fix spell error
+[33macf5b24[m update logo in dark mode
+[33mded2961[m [bugfix]move create to update_state & fix commit failed & modify start_position (#250)
+[33mad44144[m modify quick start
+[33mfa67e4d[m modify GSA report
+[33mfb77d8f[m modify GSA report
+[33m72fc376[m Merge pull request #246 from mag1c-h/develop
+[33mede1f38[m move kvstar to sandbox
+[33m32eb1e4[m [doc] edit readme (#251)
+[33m530e6be[m edit readme
+[33m4dc5a7e[m update sparse structure
+[33m66dffb1[m Merge branch 'ModelEngine-Group:develop' into develop
+[33m139ef9a[m Add the block_size parameter to the startup command (#243)
+[33m18abba6[m [Docs] Add NPU prerequisites and installation links in quickstart doc (#248)
+[33me8ae928[m edit readme (#249)
+[33m6546fd9[m edit readme
+[33mc4b0133[m KVStar unified deploy with UCM & SIMD retrieve accelerate by AVX2&NEON (#245)
+[33m6ace7b9[m [Doc] Add figures in the index file of "Prefix Cache" and "PD Disaggregation" (#244)
+[33mce82ac7[m [Docs] Modify the patch path to adapt current directory structure (#240)
+[33m1aaea3d[m [Feat] Trace replay (#176)
+[33m23a0d38[m clean code & format for kvstar (#241)
+[33m7652c00[m Modification of documets, improving readability (#239)
+[33m7fcde6e[m change trans log level to debug (#236)
+[33m2e95e46[m [Feat]Support kvstar sparse attention algorithm (#193)
+[33mddf598a[m [Doc] Update index.md
+[33m0816854[m Merge pull request #235 from harrisonyhq/dev_ci_928
+[33m2fd4492[m [CI] temporarily cancel gpu workflow
+[33me3a377a[m Merge pull request #234 from harrisonyhq/dev_ci_928
+[33mebb68ff[m [CI] fix ci bug
+[33mdf651a3[m Merge pull request #233 from harrisonyhq/dev_ci_928
+[33m8409407[m [CI] use arc runner
+[33m2193e9d[m Add UCM welcome page in docs
+[33m1012e23[m [doc] update ESA doc (#232)
+[33m23347e8[m update store build script
+[33m6e7696c[m update store build script
+[33m04866de[m Create README.md
+[33m505091e[m Create README.md
+[33md5b4cde[m [Doc] Support readthedocs (#226)
+[33m984d31f[m fix ci problem (#227)
+[33mf2c2e35[m [CI] Add e2e test yaml (#230)
+[33m1d90bf3[m Create a single cmd to start local doc
+[33mac4ab0a[m Update README.md
+[33m6e13378[m Update branch explanation on README
+[33m9ed1157[m  esa block hash fix (#224)
+[33m0cd97fa[m [bugfix] index out of range (#223)
+[33m9ab75d2[m [wip]fix duplicate create (#220)
+[33mbd82eb9[m Merge pull request #222 from mag1c-h/dev_store_object
+[33mab2d3e2[m [doc] Add DRAM performance data and modify workflow. (#221)
+[33md9afcb9[m modify hash function (#217)
+[33me1fffb2[m replace store config name from transferIoSize to io_size
+[33mb99bd34[m change store from singleton to object
+[33m12c33ce[m fix esa (#219)
+[33m07b60d4[m [docs] add pc and pd docs (#216)
+[33m562e052[m [Docs]Update the performance results of prefix-cache (#215)
+[33m9408dc1[m [Docs] Add quickstart document; update installation and dockerfile (#210)
+[33me36cc09[m Merge pull request #214 from mag1c-h/dev_ascend_compile_error_fix
+[33ma112540[m fix compile error on ascend
+[33mec5244a[m Merge pull request #213 from hek14/dev_esa_hk
+[33m76cf257[m [fix] setup.py
+[33me896839[m Merge pull request #212 from hek14/dev_esa_hk
+[33m2a3aea4[m [fix] ktc config
+[33ma902a01[m Merge pull request #199 from wangwenxin0312/dev_esa_v2
+[33m06563dc[m ESA v2
+[33m1ab23bd[m [feat]dev_product to develop (#208)
+[33m35c81a1[m redefine store interface and structure (#189)
+[33mc6bf398[m [Fix] fix workflow space error (#206)
+[33ma17df9f[m [Patch]Update patch (#205)
+[33md12550f[m [Fix][Doc] Solve conflicts and modify docs
+[33m2d50c3d[m [Feat] add cuda topk and gsa descriptions (#198)
+[33m9d1b7c7[m [Perf]kv_block_size as well as transferIoSize are calculated rather than configured (#196)
+[33m95f9079[m [bugfix]gsa fix running reqs exceed 30 bug (#195)
+[33me487932[m [bugfix]gsa fix reslotmapping bug (#194)
+[33m059931d[m [bugfix] fix whl install gsa error and gsa kpre reslotmapping out of range (#204)
+[33m2714d15[m roll back dataoffset (#201)
+[33m5068ec1[m Merge pull request #203 from harrisonyhq/develop
+[33m3940ea9[m [Fix] Fix workflow image space error in action
+[33m264f2cc[m [Feat] add cuda topk and gsa descriptions (#198)
+[33md5b735c[m [Perf]kv_block_size as well as transferIoSize are calculated rather than configured (#196)
+[33mbd8221c[m clean doc directory (#197)
+[33mb7869e3[m [bugfix]gsa fix running reqs exceed 30 bug (#195)
+[33maef5f3a[m [bugfix]gsa fix reslotmapping bug (#194)
+[33m6e2eb03[m [Fix] Fix bug: check task returns -50005 during async load (#192)
+[33m3ac5926[m fix pp problem and remove err logs when duplicate create (#191)
+[33m406c548[m [feature] GSA (#190)
+[33m5c191a2[m [perf]prepare offset in advance (#188)
+[33m62685d6[m Merge pull request #182 from leideng/develop-kvcomp-rebase
+[33m1da231f[m Resolve the issue of the first-round commit failure under dsv2 (#186)
+[33mdd7f640[m pre-commit pass isort check
+[33mb944b14[m pre-commit pass balck check
+[33m29f1188[m correct three misspell words and pass codespell check
+[33m7b714ad[m Add KVComp sparse attention implementation in UCM.
+[33md9393b8[m Merge pull request #172 from truthstriver/develop-upload-retake-codes
+[33me563a54[m correct ci
+[33m9a255ac[m Update code
+[33m62ed31f[m [Feature]refactor ucconnector (#167)
+[33m27c77c8[m upload retake
+[33m3d6c86e[m [Feat] support load_async for load failure and adjust patches (#165)
+[33m81f84e2[m [Feat] Support load async (#166)
+[33mbf081fb[m modify patch and workflow (#163)
+[33mf939165[m change code directory (#161)
+[33ma2dce8a[m 0.0.2 release merge develop (#158)
+[33m9dc1944[m [Doc] change logo and rearange docs
+[33ma9ff92c[m [feature]modify create interface (#145)
+[33ma82330e[m return error if block exists while create (#138)
+[33m815a5a0[m Non-blocking interfaces are provided to check whether the transmission task is completed (#139)
+[33m1a9c24d[m [bugfix]modify mla dump (#128)
+[33mccbee78[m [Feature] Add mooncake store (#117)
+[33mbb85854[m [Feat]Support UCM Sparse on cuda (#126)
+[33m1eca8fb[m Fix rank handling in multi-node PP setup (#129)
+[33mbead072[m Merge pull request #130 from UESTC-AHao/develop
+[33mc57e665[m add config parameter
+[33m4885393[m [bugfix] bugfix in ucmnfsstore (#123)
+[33mf659e16[m Merge pull request #121 from NaganooMei/develop_0826
+[33m7180cbf[m remove load_tasks
+[33ma91655e[m [Fix] Fix spelling issues with PR templates (#119)
+[33m44b6fee[m Merge pull request #118 from NaganooMei/develop_0826
+[33m570e7ef[m rename vllm-adapt-2 to vllm-adapt-sparse
+[33m0b5f0e7[m fix: uc_connector,rm .gitkeep ucm_oceanstor.py
+[33m33b6fd9[m Merge pull request #112 from hek14/dev_ucm_sparse
+[33me400ebc[m add patch
+[33m8ea70c9[m adapt for vllm 0.9.1 (#113)
+[33medb238a[m [refact] format
+[33me9734b6[m [Fix] Fix duplicate create/commit errors upon preemption (#109)
+[33m265136e[m Modify start_load_kv (#103)
+[33m1b3cba2[m add sparse_attn docs
+[33m58091f3[m add sparse_attn example
+[33mc880cb9[m [fix] compatible with prefix cache
+[33m3475f58[m fix typo
+[33m09114ad[m ESA 1.0
+[33m89d9c26[m [Fix] Fix ascend compile error (#106)
+[33m578b44c[m [Fix] Fix .so build error (#104)
+[33m9704d44[m [Fix bug] fix uc_connector ut and change hash generation method
+[33mcf44d4a[m Revert "[Feature] add Mooncake Store" (#98)
+[33m5311a7f[m [Perf] Pipelined ucmnfsstore (#97)
+[33m0795547[m [Feature][P/D] add example for disaggregated prefill (#90)
+[33md060f78[m adapt deepseek (#89)
+[33m32c211b[m [Fix bug] fix docker build err and installation.md (#87)
+[33m385325b[m Merge pull request #86 from ModelEngine-Group/develop_mooncake
+[33m6a4a959[m [Feature] add Mooncake Store
+[33mbd90d48[m Revert "ucm_sparse framework v1.0 (#79)" (#82)
+[33m5f97689[m Merge pull request #80 from harrisonyhq/develop
+[33m0198cbb[m [Fix] Fix cant find cmake error when using pip install -e .
+[33mb965dc8[m ucm_sparse framework v1.0 (#79)
+[33md9a7edb[m  [Style] Fix codestyle problems and typo in develop (#75)
+[33m908a878[m [Feat] Merge 0.0.1 back into develop (#72)
+[33m7c7dc6b[m [Doc] update install doc using patch to build from source code (#68)
+[33m4db6d17[m [CI] Add issue and pull request template; [Fix][Doc] Fix nfs doc error. (#62) (#64)
+[33m1301e71[m [Doc] Add vllm institution (#61)
+[33ma70ef6c[m fix issue#26 and issue#36 (#55)
+[33me704c40[m Merge pull request #50 from flesher0813/0.0.1-tag
+[33mb17e77f[m add perf data in readme (#49)
+[33m6e03b9e[m [doc] Add export of device type in installation;[Fix] fix version invalid#45 #46 (#47)
+[33m8e18e09[m [feature][docs]finish nfs store and add docs (#44)
+[33m381c832[m [Feat] Move kv_block_size to config (#43)
+[33m0f81cb5[m [Fix][Docs] Make example runnable and add performance data (closes #37 #29 #42) (#41)
+[33m73cf03b[m Merge pull request #30 from flesher0813/0.0.1-release
+[33m6aa8309[m [Fix bug] fix issue#25 issue#31 and issue#33
+[33m50e57c5[m Merge pull request #34 from harrisonyhq/0.0.1-release
+[33m11630f9[m [Feature] Add Cmake build command in setup.py
+[33m01e8f66[m Merge pull request #32 from ygwpz/0.0.1-release
+[33mc71290c[m change docs outline
+[33m1622ba4[m Merge pull request #23 from ModelEngine-Group/develop_nfsstore
+[33m77c3ace[m Merge pull request #20 from flesher0813/develop
+[33m510ee07[m Merge pull request #24 from ygwpz/develop
+[33mfa1cd50[m add readme and license
+[33mda7b0fd[m [Feature] nfsstore
+[33m90945f7[m [Feat] Add dockerfiles
+[33mdfe3e14[m Merge pull request #18 from harrisonyhq/develop
+[33m562ea5a[m [Style] Remove MB_TO_BYTE, change config max_cache_size from MB to byte
+[33maea666c[m [Fix] fix some bugs
+[33mc9ecc5c[m [Feat] Add device support for CUDA devices
+[33md5f0166[m [Doc] Fix some typo in document
+[33m1166362[m [Feat] Add some arguments in config for ucm_dram
+[33mf004105[m [Doc] Add doc for dram connector
+[33m8bed8dc[m [style] Add constant MB_TO_BYTE, add default max_cache_size as 5Gb. [Fix] Add asynchronize copy non blocking argument."
+[33m2722d73[m [Doc] Installation of ucm (#17)
+[33m95413be[m [Feat] Add ucm dram connector and test
+[33mc213e94[m remove impl test and add uc connector test (#14)
+[33m516d3b8[m Merge pull request #15 from ygwpz/develop
+[33mef46630[m add build doc readme and requirements
+[33mec32418[m init doc
+[33mc70fe56[m Merge pull request #13 from flesher0813/develop
+[33maa6cb83[m adapt vllm v0.9.2
+[33mb971f91[m Merge pull request #11 from flesher0813/develop
+[33ma6b9f08[m remove impl and fix dump failed issue
+[33m94356b5[m init repo and add intergration
+[33mf0f9455[m initial commit.
