@@ -49,9 +49,10 @@ bool TransportTaskContext::StubDone()
 
 void TransportTaskManager::Shutdown()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& [id, ctx] : tasks_) {
-        (void)id;
+    for (const auto& ctx : GetAll()) {
+        if (ctx == nullptr) { continue; }
+
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
         auto expected = ctx->state.load(std::memory_order_acquire);
         while (expected == TransportTaskState::PENDING ||
                expected == TransportTaskState::INFLIGHT) {
