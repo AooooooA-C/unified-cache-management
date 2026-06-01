@@ -62,6 +62,7 @@ public:
     Status Cancel(TaskId taskId) override;
     Status Check(TaskId taskId, TaskResult& result) override;
     Status Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& result) override;
+    Status SetCompletionCallback(TaskId taskId, std::function<void(TaskId)> callback) override;
 
     Status StubCheck(TaskId task_id,
                      TaskResult& result);  // Stub for testing, remove after real implementation
@@ -89,6 +90,7 @@ private:
     Status SubmitAsync(std::unique_ptr<TransportTaskContext> ctx, TaskId& taskId);
     void WorkerLoop();
     void CompleteTask(const TransportTaskContextPtr& ctx);
+    static void NotifyCompletion(const TransportTaskContextPtr& ctx);
 
     // Stub for testing, remove after real implementation
     Status StubSend(ConnectionChannel* channel, TransportTaskContext* ctx);

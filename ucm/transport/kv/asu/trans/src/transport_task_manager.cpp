@@ -49,20 +49,21 @@ bool TransportTaskContext::StubDone()
 
 void TransportTaskManager::Shutdown()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto& [id, ctx] : tasks_) {
-        (void)id;
-        auto expected = ctx->state.load(std::memory_order_acquire);
-        while (expected == TransportTaskState::PENDING ||
-               expected == TransportTaskState::INFLIGHT) {
+    for (const auto& ctx : GetAll()) {
+        if (ctx == nullptr) { continue; }
+
+        std::function<void(TaskId)> callback;
+        {
+            std::lock_guard<std::mutex> lock(ctx->waitMu);
+            if (ctx->Done()) { continue; }
+
             ctx->finalStatus =
                 Status::Error(StatusCode::CANCELED, "transport shutdown canceled task");
-            if (ctx->state.compare_exchange_weak(expected, TransportTaskState::CANCELED,
-                                                 std::memory_order_acq_rel)) {
-                ctx->cv.notify_all();
-                break;
-            }
+            ctx->state.store(TransportTaskState::CANCELED, std::memory_order_release);
+            callback = std::move(ctx->completionCallback);
+            ctx->cv.notify_all();
         }
+        if (callback) { callback(ctx->taskId); }
     }
 }
 

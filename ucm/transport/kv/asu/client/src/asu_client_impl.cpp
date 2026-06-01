@@ -393,6 +393,7 @@ Status AsuClientImpl::SubmitAsyncOnce(ClientOpType opType, const std::vector<KVB
         return Status::Error(StatusCode::INTERNAL_ERROR, "client task disappeared after submit");
     }
 
+    rawCtx->state.store(ClientTaskState::INFLIGHT, std::memory_order_release);
     status = DispatchTask(rawCtx);
     if (!status.ok()) {
         MarkRefreshIfNeeded(status, needRefresh);
@@ -401,7 +402,6 @@ Status AsuClientImpl::SubmitAsyncOnce(ClientOpType opType, const std::vector<KVB
         return status;
     }
 
-    rawCtx->state.store(ClientTaskState::INFLIGHT, std::memory_order_release);
     return Status::OK();
 }
 
@@ -462,6 +462,7 @@ Status AsuClientImpl::SubmitAsyncOnce(ClientOpType opType, const std::vector<Cac
         return Status::Error(StatusCode::INTERNAL_ERROR, "client task disappeared after submit");
     }
 
+    rawCtx->state.store(ClientTaskState::INFLIGHT, std::memory_order_release);
     status = DispatchTask(rawCtx);
     if (!status.ok()) {
         MarkRefreshIfNeeded(status, needRefresh);
@@ -470,7 +471,6 @@ Status AsuClientImpl::SubmitAsyncOnce(ClientOpType opType, const std::vector<Cac
         return status;
     }
 
-    rawCtx->state.store(ClientTaskState::INFLIGHT, std::memory_order_release);
     return Status::OK();
 }
 
@@ -508,9 +508,18 @@ Status AsuClientImpl::DispatchTask(const ClientTaskContextPtr& ctx)
             }
             return WithContext(status, "asuId=" + std::to_string(subTask.asuId));
         }
+        (void)transIter->second->SetCompletionCallback(
+            subTask.transTaskId,
+            [this, weakCtx = std::weak_ptr<ClientTaskContext>(ctx), asuId = subTask.asuId,
+             transTaskId = subTask.transTaskId](TaskId completedTaskId) {
+                if (completedTaskId != transTaskId) { return; }
+                auto lockedCtx = weakCtx.lock();
+                if (lockedCtx) { OnTransportTaskComplete(lockedCtx, asuId, transTaskId); }
+            });
     }
     return Status::OK();
 }
+
 bool AsuClientImpl::PollTask(const ClientTaskContextPtr& ctx)
 {
     auto snapshot = ctx == nullptr ? nullptr : ctx->viewSnapshot;
@@ -573,6 +582,75 @@ bool AsuClientImpl::PollTask(const ClientTaskContextPtr& ctx)
     }
     return false;
 }
+
+void AsuClientImpl::OnTransportTaskComplete(const ClientTaskContextPtr& ctx, AsuId asuId,
+                                            TaskId transTaskId)
+{
+    auto snapshot = ctx == nullptr ? nullptr : ctx->viewSnapshot;
+    if (!ctx || !snapshot || ctx->Done()) { return; }
+
+    std::lock_guard<std::mutex> lock(ctx->waitMu);
+    if (ctx->Done()) { return; }
+
+    bool allDone = true;
+    bool anyFailed = false;
+    for (auto& subTask : ctx->subTasks) {
+        if (subTask.completed) {
+            anyFailed = anyFailed || subTask.failed;
+            continue;
+        }
+        if (subTask.asuId != asuId || subTask.transTaskId != transTaskId) {
+            allDone = false;
+            continue;
+        }
+
+        auto transIter = snapshot->transports.find(subTask.asuId);
+        if (transIter == snapshot->transports.end()) {
+            subTask.completed = true;
+            subTask.failed = true;
+            anyFailed = true;
+            continue;
+        }
+
+        TaskResult subResult;
+        auto status = transIter->second->Check(subTask.transTaskId, subResult);
+        if (!status.ok()) {
+            subTask.completed = true;
+            subTask.failed = true;
+            anyFailed = true;
+            continue;
+        }
+        if (subResult.status.code == StatusCode::IN_PROGRESS) {
+            allDone = false;
+            continue;
+        }
+
+        subTask.completed = true;
+        if (!subResult.status.ok()) {
+            subTask.failed = true;
+            anyFailed = true;
+        }
+        const auto& originalIndices = subTask.originalIndices;
+        for (std::size_t i = 0; i < originalIndices.size() && i < subResult.entryStatus.size();
+             ++i) {
+            ctx->entryStatus[originalIndices[i]] = subResult.entryStatus[i];
+        }
+    }
+
+    for (const auto& subTask : ctx->subTasks) {
+        allDone = allDone && subTask.completed;
+        anyFailed = anyFailed || subTask.failed;
+    }
+    if (!allDone) { return; }
+
+    ctx->finalStatus =
+        anyFailed ? Status::Error(StatusCode::PARTIAL_FAILED, "client task partially failed")
+                  : Status::OK();
+    ctx->state.store(anyFailed ? ClientTaskState::FAILED : ClientTaskState::COMPLETED,
+                     std::memory_order_release);
+    ctx->cv.notify_all();
+}
+
 Status AsuClientImpl::BuildResult(const ClientTaskContextPtr& ctx, TaskResult& result)
 {
     result.status = ctx->Done() ? ctx->finalStatus

@@ -85,11 +85,14 @@ Status AsuTransportImpl::Shutdown()
 
     for (const auto& ctx : taskManager_.GetAll()) {
         if (ctx == nullptr || ctx->Done()) { continue; }
-        std::lock_guard<std::mutex> lock(ctx->waitMu);
-        ctx->finalStatus =
-            Status::Error(StatusCode::CANCELED, "transport task canceled by shutdown");
-        ctx->state.store(TransportTaskState::CANCELED, std::memory_order_release);
-        ctx->cv.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(ctx->waitMu);
+            ctx->finalStatus =
+                Status::Error(StatusCode::CANCELED, "transport task canceled by shutdown");
+            ctx->state.store(TransportTaskState::CANCELED, std::memory_order_release);
+            ctx->cv.notify_all();
+        }
+        NotifyCompletion(ctx);
     }
 
     stop_.store(true, std::memory_order_release);
@@ -169,11 +172,14 @@ Status AsuTransportImpl::Cancel(TaskId taskId)
     auto ctx = taskManager_.Get(taskId);
     if (!ctx) { return Status::Error(StatusCode::TASK_NOT_FOUND, "transport task not found"); }
 
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    if (ctx->Done()) { return Status::OK(); }
-    ctx->finalStatus = Status::Error(StatusCode::CANCELED, "transport task canceled");
-    ctx->state.store(TransportTaskState::CANCELED, std::memory_order_release);
-    ctx->cv.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        if (ctx->Done()) { return Status::OK(); }
+        ctx->finalStatus = Status::Error(StatusCode::CANCELED, "transport task canceled");
+        ctx->state.store(TransportTaskState::CANCELED, std::memory_order_release);
+        ctx->cv.notify_all();
+    }
+    NotifyCompletion(ctx);
     return Status::OK();
 }
 
@@ -206,6 +212,22 @@ Status AsuTransportImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult
     }
     lock.unlock();
     taskManager_.Remove(taskId);
+    return Status::OK();
+}
+
+Status AsuTransportImpl::SetCompletionCallback(TaskId taskId,
+                                               std::function<void(TaskId)> callback)
+{
+    auto ctx = taskManager_.Get(taskId);
+    if (!ctx) { return Status::Error(StatusCode::TASK_NOT_FOUND, "transport task not found"); }
+
+    bool done = false;
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        done = ctx->Done();
+        if (!done) { ctx->completionCallback = std::move(callback); }
+    }
+    if (done && callback) { callback(taskId); }
     return Status::OK();
 }
 
@@ -367,22 +389,21 @@ void AsuTransportImpl::CompleteTask(const TransportTaskContextPtr& ctx)
         return;
     }
 
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
+            ctx->cv.notify_all();
+            return;
+        }
+        if (ctx->opType == TransportOpType::QUERY) {
+            ctx->queryResult.exists.assign(ctx->keys.size, 0);
+            ctx->queryResult.prefixHitKeys = 0;
+        }
+        ctx->finalStatus = Status::OK();
+        ctx->state.store(TransportTaskState::COMPLETED, std::memory_order_release);
         ctx->cv.notify_all();
-        return;
     }
-    if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
-        ctx->cv.notify_all();
-        return;
-    }
-    if (ctx->opType == TransportOpType::QUERY) {
-        ctx->queryResult.exists.assign(ctx->keys.size, 0);
-        ctx->queryResult.prefixHitKeys = 0;
-    }
-    ctx->finalStatus = Status::OK();
-    ctx->state.store(TransportTaskState::COMPLETED, std::memory_order_release);
-    ctx->cv.notify_all();
+    NotifyCompletion(ctx);
 }
 
 void AsuTransportImpl::StubCompleteTask(const TransportTaskContextPtr& ctx)
@@ -432,10 +453,23 @@ void AsuTransportImpl::StubCompleteTask(const TransportTaskContextPtr& ctx)
 
     UC_DEBUG("AsuTransportImpl::CompleteTask task_id={} no available channel, state->FAILED",
              ctx->taskId);
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    ctx->finalStatus = Status::Error(StatusCode::NO_ACTIVE_CONNECTION, "no available channel");
-    ctx->state.store(TransportTaskState::FAILED, std::memory_order_release);
-    ctx->cv.notify_all();
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        ctx->finalStatus = Status::Error(StatusCode::NO_ACTIVE_CONNECTION, "no available channel");
+        ctx->state.store(TransportTaskState::FAILED, std::memory_order_release);
+        ctx->cv.notify_all();
+    }
+    NotifyCompletion(ctx);
+}
+
+void AsuTransportImpl::NotifyCompletion(const TransportTaskContextPtr& ctx)
+{
+    std::function<void(TaskId)> callback;
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        callback = std::move(ctx->completionCallback);
+    }
+    if (callback) { callback(ctx->taskId); }
 }
 
 void AsuTransportImpl::BuildResult(const TransportTaskContext& ctx, TaskResult& result)

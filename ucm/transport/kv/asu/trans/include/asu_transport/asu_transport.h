@@ -24,6 +24,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -94,6 +95,14 @@ public:
     virtual Status Cancel(TaskId taskId) = 0;
     virtual Status Check(TaskId taskId, TaskResult& result) = 0;
     virtual Status Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& result) = 0;
+    virtual Status SetCompletionCallback(TaskId taskId,
+                                         std::function<void(TaskId)> callback)
+    {
+        (void)taskId;
+        (void)callback;
+        return Status::Error(StatusCode::UNSUPPORTED,
+                             "transport completion callbacks are not supported");
+    }
 
     virtual Status StubCheck(
         TaskId task_id,

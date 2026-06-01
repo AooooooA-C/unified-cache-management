@@ -73,7 +73,6 @@ struct ClientTaskContext {
     std::atomic<ClientTaskState> state{ClientTaskState::PENDING};
     Status finalStatus{Status::OK()};
 
-    // TODO: move to transport completion-driven notification when transport exposes callbacks.
     std::mutex waitMu;
     std::condition_variable cv;
 

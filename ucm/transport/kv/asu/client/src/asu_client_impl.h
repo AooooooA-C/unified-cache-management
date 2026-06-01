@@ -111,6 +111,9 @@ private:
     Status DispatchTask(const ClientTaskContextPtr& ctx);
     // Polls transport subtasks and copies completed entry statuses back by original index.
     bool PollTask(const ClientTaskContextPtr& ctx);
+    // Handles a transport completion callback for one routed subtask.
+    void OnTransportTaskComplete(const ClientTaskContextPtr& ctx, AsuId asuId,
+                                 TaskId transTaskId);
     // Converts a client task context into the public task result shape.
     Status BuildResult(const ClientTaskContextPtr& ctx, TaskResult& result);
     // Waits for one client task context until completion or timeout.

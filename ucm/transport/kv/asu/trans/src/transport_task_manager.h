@@ -26,6 +26,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <functional>
 #include <mutex>
 #include <vector>
 #include "asu_transport/types.h"
@@ -82,6 +83,7 @@ struct TransportTaskContext {
 
     std::mutex waitMu;
     std::condition_variable cv;
+    std::function<void(TaskId)> completionCallback;
 
     bool Done() const;
     bool StubDone();  // Stub for testing, remove after real implementation
